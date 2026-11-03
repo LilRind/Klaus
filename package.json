@@ -1,0 +1,33 @@
+{
+  "name": "hello-agents-ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TypeScript implementation of the HelloAgents mini agent framework (Chapter 7)",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "check:config": "tsx examples/check-config.ts",
+    "example:quickstart": "tsx examples/quickstart.ts",
+    "example:basic": "tsx examples/basic-chat.ts",
+    "example:stream": "tsx examples/streaming.ts",
+    "example:simple": "tsx examples/simple-agent-tools.ts",
+    "example:react": "tsx examples/react-agent.ts",
+    "example:reflection": "tsx examples/reflection-agent.ts",
+    "example:plan": "tsx examples/plan-solve-agent.ts",
+    "example:functioncall": "tsx examples/function-call-agent.ts",
+    "example:search": "tsx examples/advanced-search.ts",
+    "example:chain": "tsx examples/tool-chain.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "openai": "^4.77.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

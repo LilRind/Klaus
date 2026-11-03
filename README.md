@@ -1,0 +1,110 @@
+# HelloAgents-TS
+
+《Hello Agents》第 7 章「构建你的智能体框架」的 TypeScript 从零实现。
+练习原书：[datawhalechina/Hello-Agents](https://github.com/datawhalechina/Hello-Agents)（框架原版参考：[jjyaoao/helloagents](https://github.com/jjyaoao/helloagents)）。
+不依赖书里的 `hello-agents` Python 包，所有核心层代码按章节架构重写，
+用 vitest + 可注入的 LLM 桩实现全离线测试（46 个用例，跑测试不需要 API Key）。
+
+## 与书第 7 章的对应关系
+
+| 书章节 | 本项目文件 | 说明 |
+|---|---|---|
+| 7.2 HelloAgentsLLM / 多提供商 / 自动检测 | `src/core/llm.ts` | `ChatLLM` 接口 + `OpenAICompatLLM` 默认实现，`detectProvider()` 复刻 7.2.3 检测优先级 |
+| 7.2 my_main.py 流式验证 | `examples/streaming.ts` | LLM 裸流式 + Agent 级 `streamRun`，对标书的 `think` 流式输出 |
+| 7.3.1 Message | `src/core/message.ts` | 角色联合类型 = Python `Literal` 的编译期等价物，运行期再兜底校验 |
+| 7.3.2 Config | `src/core/config.ts` | 循环上限 / 超时 / 温度集中管理 |
+| 7.3.3 Agent ABC | `src/core/agent.ts` | 身份 + llm 依赖 + 跨轮 history，`run()` 留给子类 |
+| 7.4.1 SimpleAgent | `src/agents/simple-agent.ts` | `[TOOL_CALL:name:params]` 文本协议 + 多轮工具循环 + 超限强制收尾 |
+| 7.4.2 ReActAgent | `src/agents/react-agent.ts` | `Thought/Action: tool[input]` 协议，Observation 回填 `{history}` 区块 |
+| 7.4.3 ReflectionAgent | `src/agents/reflection-agent.ts` | 第四章 Memory 轨迹模块 + 生成→反思→修改循环，双语停止条件，`customPrompts` 部分覆盖 |
+| 7.4.4 PlanAndSolveAgent | `src/agents/plan-solve-agent.ts` | 第四章 Planner/Executor 分离组合；计划解析失败优雅终止 |
+| 7.4.5 FunctionCallAgent | `src/agents/function-call-agent.ts` | OpenAI 原生函数调用：`invokeWithTools` + JSON Schema 构建 + toolCallId 回指 |
+| 7.5 工具系统 | `src/tools/*` | Tool 基类 / ToolRegistry / 递归下降计算器（对标书的 `ast.parse` 安全求值） |
+| 7.5.3 多源搜索 | `src/tools/builtin/search.ts` | Tavily/SerpApi 双源降级，fetch 与 env 可注入（测试零网络） |
+| 7.5.4 工具链/异步执行 | `src/tools/chain.ts` `src/tools/async-executor.ts` | 输出键传递数据的 ToolChain + 有界并行 AsyncToolExecutor |
+
+## 目录结构
+
+```
+hello-agents-ts/
+├── src/
+│   ├── core/                    # 核心框架层
+│   │   ├── agent.ts             # Agent 抽象基类
+│   │   ├── llm.ts               # ChatLLM 接口 + OpenAI 兼容实现
+│   │   ├── message.ts           # 消息系统
+│   │   ├── config.ts            # 配置管理
+│   │   ├── memory.ts            # execution/reflection 轨迹记忆
+│   │   └── exceptions.ts        # 异常体系
+│   ├── agents/                  # Agent 范式层
+│   │   ├── simple-agent.ts      # 对话 + 文本协议工具调用
+│   │   └── react-agent.ts       # Thought/Action/Observation 循环
+│   │   ├── reflection-agent.ts  # 生成→反思→修改
+│   │   ├── plan-solve-agent.ts  # 先规划后执行
+│   │   └── function-call-agent.ts # 原生函数调用
+│   └── tools/                   # 工具系统层
+│       ├── tool.ts              # Tool 基类 + FunctionTool
+│       ├── registry.ts          # 注册 / 描述生成 / 按名执行
+│       ├── builtin/calculator.ts# 安全表达式求值（递归下降，无 eval）
+│       ├── builtin/search.ts    # Tavily/SerpApi 多源搜索
+│       ├── chain.ts             # 工具链（输出键传递数据）
+│       └── async-executor.ts    # 有界并行执行器
+├── tests/                       # vitest 全离线（ScriptedLLM 桩）
+├── examples/                    # basic-chat / simple-agent / react-agent
+└── vitest.config.ts
+```
+
+## 快速开始
+
+```bash
+npm install
+
+# 全部单元测试（无需 API Key）
+npm test
+npm run typecheck
+
+# 真实 LLM 示例（需先配置 .env）
+cp .env.example .env   # 填入 LLM_MODEL_ID / LLM_API_KEY / LLM_BASE_URL
+npm run example:basic        # 最小 LLM 调用
+npm run example:simple       # SimpleAgent + 计算器
+npm run example:react        # ReAct 循环（Thought/Action/Observation）
+npm run check:config         # 只验证 .env 检测，不调 API
+```
+
+### 最小示例
+
+```ts
+import { OpenAICompatLLM, SimpleAgent, ToolRegistry, CalculatorTool } from "./src";
+
+const llm = new OpenAICompatLLM();            // 按 .env 自动检测 provider
+const tools = new ToolRegistry().register(new CalculatorTool());
+const agent = new SimpleAgent("计算助手", llm, "你是计算助手", undefined, tools);
+
+const answer = await agent.run("请帮我计算 (12+8)*3");
+```
+
+## 关键设计决策
+
+1. **Agent 只依赖 `ChatLLM` 接口，不依赖具体实现**——测试注入 `ScriptedLLM`
+   即可离线验证全部循环逻辑（工具协议解析、超限收尾、Observation 回填），
+   这是比书里更进一步的可测试性设计。
+2. **工具契约保持"字符串进、字符串出"**——对齐书的文本协议理念，
+   LLM 只需按 `[TOOL_CALL:name:params]` / `tool[input]` 格式输出，
+   框架层不做 Function Calling 的强类型绑定。
+3. **计算器用手写递归下降解析器**——对标书里 `ast.parse` 白名单求值的意图：
+   语法层面只接受数字/四则/括号/sqrt/pi，代码注入在解析阶段即被拒绝（有对应测试）。
+4. **Provider 自动检测优先级**：baseUrl 关键字 > 模型名前缀 > provider 专属
+   环境变量 > 默认 openai；统一变量 `LLM_MODEL_ID/LLM_API_KEY/LLM_BASE_URL` 全兼容。
+5. **Reflection/PlanAndSolve 保留第四章核心结构**：Memory 记录执行/反思交替轨迹
+   （`getLastExecution`/`getTrajectory`），PlanAndSolve 由独立 Planner + Executor 组合而成，
+   计划解析失败优雅终止——第七章"框架化"不丢第四章的逻辑内核。
+6. **思考型模型适配**：glm-5.3 等思考型模型写长文时会生成大量隐藏推理，
+   非流式调用容易超时；`OpenAICompatLLM.extraBody` 可透传
+   `thinking: {type:"disabled"}` 等厂商参数，`.env` 的 `LLM_TIMEOUT` 控制超时。
+
+## 状态
+
+- [x] core 层（message / config / exceptions / llm / agent 基类）
+- [x] tools 层（Tool / ToolRegistry / 计算器）
+- [x] 五种 Agent 范式（Simple / ReAct / Reflection / PlanAndSolve / FunctionCall）
+- [x] 工具链 / 多源搜索 / 异步执行器（7.5.3 / 7.5.4）
+- [x] 第 7 章全部配套文件（对应 code/chapter7 每个示例与测试）
