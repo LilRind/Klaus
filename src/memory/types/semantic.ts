@@ -58,16 +58,27 @@ interface LlmExtractionResult {
  */
 export class LLMEntityExtractor implements EntityExtractor {
   private warned = false;
+  private enabled = true;
 
   constructor(
     private readonly llm: import("../../core/llm").ChatLLM,
     private readonly fallback: EntityExtractor = new RuleBasedEntityExtractor(),
   ) {}
 
+  /** 运行时开关：关闭后立即回落规则抽取器（不发起 LLM 调用） */
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+  }
+
+  get isEnabled(): boolean {
+    return this.enabled;
+  }
+
   async extract(content: string): Promise<{
     entities: ExtractedEntity[];
     relations: ExtractedRelation[];
   }> {
+    if (!this.enabled) return this.fallback.extract(content);
     try {
       const response = await this.llm.invoke([
         {

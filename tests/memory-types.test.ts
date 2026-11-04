@@ -193,6 +193,18 @@ describe("SemanticMemory（书 8.2.5-(3)）", () => {
     expect(String(warn.mock.calls[0]?.[0])).toContain("实体抽取降级");
     warn.mockRestore();
   });
+
+  it("LLM 实体抽取运行时开关：关闭后回落规则器且不再调用 LLM", async () => {
+    const llm = new ScriptedLLM([]);
+    const extractor = new LLMEntityExtractor(llm);
+    extractor.setEnabled(false);
+    const result = await extractor.extract("《HelloAgents》介绍了 RAG 检索");
+    // ScriptedLLM 队列为空：若仍调用 LLM 会抛"队列已耗尽"
+    expect(llm.invokeCount).toBe(0);
+    expect(result.entities.some((e) => e.name === "HelloAgents")).toBe(true);
+    extractor.setEnabled(true);
+    expect(extractor.isEnabled).toBe(true);
+  });
 });
 
 describe("PerceptualMemory（书 8.2.5-(4)）", () => {

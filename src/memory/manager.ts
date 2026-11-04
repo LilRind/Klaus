@@ -31,6 +31,7 @@ import {
 import { EpisodicMemory } from "./types/episodic";
 import { PerceptualMemory } from "./types/perceptual";
 import { SemanticMemory } from "./types/semantic";
+import type { EntityExtractor } from "./types/semantic";
 import { WorkingMemory } from "./types/working";
 
 export interface MemoryManagerOptions {
@@ -45,6 +46,8 @@ export interface MemoryManagerOptions {
   vectorStore?: VectorStore;
   graphStore?: GraphStore;
   documentStore?: DocumentStore;
+  /** 语义记忆的实体抽取器（默认规则器；可注入 LLMEntityExtractor 并随时开关） */
+  entityExtractor?: EntityExtractor;
 }
 
 export interface AddMemoryInput {
@@ -150,6 +153,7 @@ export class MemoryManager {
           vectorStore: this.vectorStore,
           graphStore: this.graphStore,
           embedder: this.embedder,
+          extractor: options.entityExtractor,
         }),
       );
     }

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智能文档问答助手 · HelloAgents 第8章</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f1420; color: #e6e9f0; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 14px 20px; background: #161d2e; border-bottom: 1px solid #2a3450; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 17px; font-weight: 600; }
+  header .status { font-size: 12px; color: #8b94ab; }
+  header .status.ok { color: #4ade80; }
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; max-width: 900px; width: 100%; margin: 0 auto; }
+  #chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; line-height: 1.6; font-size: 14px; }
+  .msg.user { align-self: flex-end; background: #2b5cff; color: #fff; max-width: 75%; }
+  .msg.bot { align-self: flex-start; background: #1a2233; border: 1px solid #2a3450; max-width: 85%; }
+  .msg.system { align-self: center; color: #8b94ab; font-size: 12px; background: none; }
+  .toolbar { display: flex; gap: 8px; padding: 10px 20px 0; flex-wrap: wrap; }
+  .toolbar button, .toolbar label.upload { padding: 6px 12px; font-size: 12px; border: 1px solid #2a3450; background: #1a2233; color: #cbd3e4; border-radius: 6px; cursor: pointer; }
+  .toolbar button:hover, .toolbar label.upload:hover { background: #232d44; }
+  .toolbar input[type=file] { display: none; }
+  form#input-row { display: flex; gap: 10px; padding: 14px 20px 18px; }
+  #cmd { flex: 1; padding: 12px 16px; border-radius: 10px; border: 1px solid #2a3450; background: #161d2e; color: #e6e9f0; font-size: 14px; outline: none; }
+  #cmd:focus { border-color: #2b5cff; }
+  #send { padding: 0 22px; border-radius: 10px; border: none; background: #2b5cff; color: #fff; font-size: 14px; cursor: pointer; }
+  #send:disabled { opacity: .5; cursor: wait; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧠 智能文档问答助手</h1>
+  <span class="status" id="status">未初始化 — 发送 /init &lt;user_id&gt; 开始</span>
+</header>
+<main>
+  <div id="chat"></div>
+  <div class="toolbar">
+    <button data-cmd="/stats">📊 统计</button>
+    <button data-cmd="/recall">🔍 回顾</button>
+    <button data-cmd="/report">📄 学习报告</button>
+    <button data-cmd="/askx " data-prompt="1">🚀 高级提问</button>
+    <button data-cmd="/extract">🔁 抽取开关</button>
+    <label class="upload">📎 上传文档建库<input type="file" id="file" accept=".pdf,.docx,.md,.txt,.json,.csv,.html,.htm"></label>
+  </div>
+  <form id="input-row">
+    <input id="cmd" placeholder="输入 /命令，或直接输入问题（自动 /ask）…" autocomplete="off" autofocus>
+    <button id="send" type="submit">发送</button>
+  </form>
+</main>
+<script>
+const chat = document.getElementById("chat");
+const input = document.getElementById("cmd");
+const send = document.getElementById("send");
+const status = document.getElementById("status");
+
+function addMsg(text, cls) {
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  div.textContent = text;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+async function runCommand(cmd) {
+  addMsg(cmd, "user");
+  send.disabled = true;
+  try {
+    const res = await fetch("/api/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: cmd }),
+    });
+    const data = await res.json();
+    addMsg(data.output || "(空响应)", "bot");
+    if (data.output && data.output.includes("已初始化")) {
+      status.textContent = "已连接 · 记忆/RAG 就绪";
+      status.className = "status ok";
+    }
+  } catch (e) {
+    addMsg("❌ 请求失败: " + e.message, "bot");
+  } finally {
+    send.disabled = false;
+    input.focus();
+  }
+}
+
+document.getElementById("input-row").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const value = input.value.trim();
+  if (!value) return;
+  input.value = "";
+  runCommand(value);
+});
+
+document.querySelectorAll(".toolbar button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const cmd = btn.dataset.cmd;
+    if (btn.dataset.prompt) {
+      const q = prompt("问题（将启用 MQE+HyDE 高级检索）:");
+      if (!q) return;
+      runCommand(cmd + q);
+    } else {
+      runCommand(cmd);
+    }
+  });
+});
+
+document.getElementById("file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  addMsg(`📎 上传 ${file.name} (${(file.size / 1024).toFixed(1)} KB)…`, "system");
+  const buffer = await file.arrayBuffer();
+  const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+  try {
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: file.name, contentBase64: base64 }),
+    });
+    const data = await res.json();
+    addMsg(data.output, "bot");
+  } catch (err) {
+    addMsg("❌ 上传失败: " + err.message, "bot");
+  } finally {
+    e.target.value = "";
+  }
+});
+
+addMsg("欢迎使用第8章智能文档问答助手（TS 版）。先 /init <user_id>，再 📎 上传一份 PDF/DOCX/MD，然后直接提问。", "bot");
+</script>
+</body>
+</html>

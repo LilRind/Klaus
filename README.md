@@ -41,6 +41,10 @@
 | 8.3.5 高级检索 | 同上 `RAGPipeline.search` | MQE 多查询扩展 + HyDE 假设文档，"扩展-检索-合并"三步 + memory_id 去重 |
 | 8.4 智能问答助手 | `examples/8/memory-rag-agent.ts` `examples/8/rag-pipeline.ts` | SimpleAgent + ToolRegistry 注册 MemoryTool/RAGTool，Agent 自主调用两个工具 |
 | 8.1.4 存储后端层 | `src/memory/storage/qdrant-store.ts` `neo4j-store.ts` | Qdrant（`@qdrant/js-client-rest`）与 Neo4j（`neo4j-driver`）真实后端，与内存版同接口 |
+| 8.3.4 多格式文档 | `loadDocument` + pdf-parse/mammoth | PDF/DOCX/MD/TXT/JSON/CSV/HTML；OCR/音频约定外部转 Markdown |
+| 8.4 问答助手 | `examples/8/qa-repl.ts` `qa-server.ts` `qa-web.html` | 共享命令引擎 /init /load /ask /note /recall /stats /report；REPL 与 Web 双形态 |
+| （增强）Rerank 精排 | `src/memory/rag/rerank.ts` | opt-in 二级检索（默认关闭，需 RERANK_MODEL_NAME + enable_rerank） |
+| （增强）LLM 实体抽取 | `LLMEntityExtractor` | opt-in + 运行时开关；规则抽取器为默认 |
 
 **与书的技术栈差异**（结构对齐，生态替换）：
 
@@ -104,6 +108,8 @@ npm run example:memory-types # 第八章：四种记忆类型深度演示（离�
 npm run example:rag          # 第八章：RAG 管道（检索离线可跑，问答需 LLM）
 npm run example:memory-rag-agent # 第八章：Agent 集成记忆+RAG（需 LLM）
 npm run example:memory-live  # 第八章：Qdrant/Neo4j/SQLite 真实三库联机验证
+npm run example:qa-repl      # 第八章 8.4：REPL 问答助手（需 LLM）
+npm run example:qa-web       # 第八章 8.4：Web 问答助手 → http://localhost:3000
 ```
 
 第八章的存储走**默认装配工厂**（`storage/factories.ts`）：`.env` 配了

@@ -25,7 +25,8 @@
     "example:memory-rag-agent": "tsx examples/8/memory-rag-agent.ts",
     "example:memory-live": "tsx examples/8/memory-live.ts",
     "verify:memory-crud": "tsx examples/8/memory-crud.ts",
-    "example:qa-repl": "tsx examples/8/qa-repl.ts"
+    "example:qa-repl": "tsx examples/8/qa-repl.ts",
+    "example:qa-web": "tsx examples/8/qa-server.ts"
   },
   "dependencies": {
     "@qdrant/js-client-rest": "^1.20.0",
