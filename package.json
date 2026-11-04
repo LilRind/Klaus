@@ -23,7 +23,8 @@
     "example:memory-types": "tsx examples/8/memory-types.ts",
     "example:rag": "tsx examples/8/rag-pipeline.ts",
     "example:memory-rag-agent": "tsx examples/8/memory-rag-agent.ts",
-    "example:memory-live": "tsx examples/8/memory-live.ts"
+    "example:memory-live": "tsx examples/8/memory-live.ts",
+    "verify:memory-crud": "tsx examples/8/memory-crud.ts"
   },
   "dependencies": {
     "@qdrant/js-client-rest": "^1.20.0",

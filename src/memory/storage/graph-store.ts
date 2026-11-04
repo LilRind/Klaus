@@ -35,6 +35,8 @@ export interface GraphStore {
   getRelationsForEntities(names: string[], limit?: number): Promise<GraphRelation[]>;
   /** 由实体集合扩张出关联记忆 ID（图检索的核心一步） */
   getMemoryIdsForEntities(names: string[]): Promise<string[]>;
+  /** 删除某条记忆在图谱中的全部引用（实体数组元素 + 来源关系 + 空实体），删除记忆时级联调用 */
+  removeMemoryAssociations(memoryId: string): Promise<void>;
   clear(): Promise<void>;
   close?(): Promise<void>;
 }
@@ -106,6 +108,19 @@ export class InMemoryGraphStore implements GraphStore {
       if (relation.memoryId) memoryIds.add(relation.memoryId);
     }
     return [...memoryIds];
+  }
+
+  async removeMemoryAssociations(memoryId: string): Promise<void> {
+    for (const entity of this.entities.values()) {
+      entity.memoryIds = entity.memoryIds.filter((id) => id !== memoryId);
+    }
+    for (let i = this.relations.length - 1; i >= 0; i--) {
+      if (this.relations[i]?.memoryId === memoryId) this.relations.splice(i, 1);
+    }
+    // 引用清零的实体一并剪除，避免图谱膨胀
+    for (const [name, entity] of [...this.entities]) {
+      if (entity.memoryIds.length === 0) this.entities.delete(name);
+    }
   }
 
   async clear(): Promise<void> {

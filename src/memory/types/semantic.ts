@@ -296,6 +296,8 @@ export class SemanticMemory extends BaseMemory {
     const existing = await this.get(id);
     if (!existing) return false;
     await this.vectors.delete([id]);
+    // 级联清理图谱引用（实体数组元素 + 来源关系），否则留下悬挂 memoryIds
+    await this.graph.removeMemoryAssociations(id);
     return true;
   }
 

@@ -202,6 +202,30 @@ export class Neo4jGraphStore implements GraphStore {
     return [...new Set([...ownIds, ...neighbors])];
   }
 
+  async removeMemoryAssociations(memoryId: string): Promise<void> {
+    await this.ensureInit();
+    await this.withSession(async (session) => {
+      // 1) 从实体 memoryIds 数组中移除引用
+      await session.run(
+        `MATCH (e:MemoryEntity) WHERE $mid IN e.memoryIds
+         SET e.memoryIds = [x IN e.memoryIds WHERE x <> $mid]`,
+        { mid: memoryId },
+      );
+      // 2) 删除以该记忆为来源的关系
+      await session.run(
+        `MATCH ()-[r:MEMORY_RELATION {memoryId: $mid}]->()
+         DELETE r`,
+        { mid: memoryId },
+      );
+      // 3) 剪除引用清零的空实体
+      await session.run(
+        `MATCH (e:MemoryEntity)
+         WHERE size(coalesce(e.memoryIds, [])) = 0
+         DETACH DELETE e`,
+      );
+    });
+  }
+
   async clear(): Promise<void> {
     await this.withSession(async (session) => {
       await session.run("MATCH (n) DETACH DELETE n");

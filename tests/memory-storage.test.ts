@@ -128,4 +128,23 @@ describe("InMemoryGraphStore", () => {
     expect(memoryIds).toEqual(expect.arrayContaining(["m1", "m2", "m3"]));
     expect(await graph.getRelationsForEntities(["Python"])).toHaveLength(1);
   });
+
+  it("removeMemoryAssociations 级联清理：数组引用 + 来源关系 + 空实体", async () => {
+    const graph = new InMemoryGraphStore();
+    await graph.addEntity({ name: "Qdrant", type: "CONCEPT", memoryIds: ["m1", "m2"] });
+    await graph.addEntity({ name: "SQLite", type: "CONCEPT", memoryIds: ["m2"] });
+    await graph.addRelation({
+      sourceName: "Qdrant",
+      targetName: "SQLite",
+      relation: "RELATED_TO",
+      memoryId: "m2",
+    });
+
+    await graph.removeMemoryAssociations("m2");
+
+    expect((await graph.getEntity("Qdrant"))?.memoryIds).toEqual(["m1"]);
+    // SQLite 只被 m2 引用 → 清零后被剪除
+    expect(await graph.getEntity("SQLite")).toBeUndefined();
+    expect(await graph.getRelationsForEntities(["Qdrant"])).toHaveLength(0);
+  });
 });
