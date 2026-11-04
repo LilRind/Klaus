@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMemoryItem, type Clock } from "../src/memory/base";
 import { TFIDFEmbedding, type EmbeddingService } from "../src/memory/embedding";
 import {
@@ -9,9 +9,11 @@ import {
 import { WorkingMemory } from "../src/memory/types/working";
 import { EpisodicMemory } from "../src/memory/types/episodic";
 import {
+  LLMEntityExtractor,
   RuleBasedEntityExtractor,
   SemanticMemory,
 } from "../src/memory/types/semantic";
+import { ScriptedLLM } from "./scripted-llm";
 import {
   PerceptualMemory,
   inferModality,
@@ -119,9 +121,9 @@ describe("EpisodicMemory（书 8.2.5-(2)）", () => {
 });
 
 describe("SemanticMemory（书 8.2.5-(3)）", () => {
-  it("规则实体抽取：引号/书名号/英文专名 + 共现关系", () => {
+  it("规则实体抽取：引号/书名号/英文专名 + 共现关系", async () => {
     const extractor = new RuleBasedEntityExtractor();
-    const { entities, relations } = extractor.extract(
+    const { entities, relations } = await extractor.extract(
       "《HelloAgents》讲了“记忆系统”与 RAG 检索",
     );
     const names = entities.map((entity) => entity.name);
@@ -168,6 +170,28 @@ describe("SemanticMemory（书 8.2.5-(3)）", () => {
       createMemoryItem({ content: "一条没有任何实体的普通记忆", memoryType: "semantic" }),
     );
     expect(await memory.list()).toHaveLength(1);
+  });
+
+  it("LLM 实体抽取：JSON 输出解析 + 围栏容忍 + 降级规则器", async () => {
+    // ① 正常 JSON（带 markdown 围栏）→ 使用 LLM 结果
+    const good = new ScriptedLLM([
+      '```json\n{"entities":[{"name":"张三","type":"PERSON"},{"name":"记忆系统","type":"CONCEPT"}],"relations":[{"source":"张三","target":"记忆系统","relation":"研究"}]}\n```',
+    ]);
+    const extractor = new LLMEntityExtractor(good);
+    const result = await extractor.extract("任意文本");
+    expect(result.entities.map((e) => e.name)).toEqual(["张三", "记忆系统"]);
+    expect(result.relations[0]?.relation).toBe("研究");
+
+    // ② 非 JSON 输出 → 解析失败抛错 → 降级规则器 + 提醒
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bad = new ScriptedLLM(["抱歉我无法完成这个任务"]);
+    const fallback = new RuleBasedEntityExtractor();
+    const degraded = new LLMEntityExtractor(bad, fallback);
+    const result2 = await degraded.extract("《HelloAgents》介绍了 RAG 检索");
+    expect(result2.entities.some((e) => e.name === "HelloAgents")).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("实体抽取降级");
+    warn.mockRestore();
   });
 });
 

@@ -68,7 +68,7 @@ async function main() {
   console.log("\n══ 3. 语义记忆 ══");
   const extractor = new RuleBasedEntityExtractor();
   const sample = "《HelloAgents》教程介绍了“记忆系统”与 RAG 检索增强";
-  const { entities, relations } = extractor.extract(sample);
+  const { entities, relations } = await extractor.extract(sample);
   console.log(`实体: ${entities.map((entity) => `${entity.name}(${entity.type})`).join(", ")}`);
   console.log(
     `关系: ${relations.map((relation) => `${relation.sourceName} —${relation.relation}→ ${relation.targetName}`).join("; ")}`,

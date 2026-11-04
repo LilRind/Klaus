@@ -38,18 +38,98 @@ export interface ExtractedRelation {
 }
 
 export interface EntityExtractor {
-  extract(content: string): {
+  /** 异步契约：规则器同步计算也包装 Promise，LLM 实现可发起真实调用 */
+  extract(content: string): Promise<{
     entities: ExtractedEntity[];
     relations: ExtractedRelation[];
-  };
+  }>;
+}
+
+interface LlmExtractionResult {
+  entities?: { name?: unknown; type?: unknown }[];
+  relations?: { source?: unknown; target?: unknown; relation?: unknown }[];
+}
+
+/**
+ * LLM 实体抽取（spaCy 的云端等价替代）：
+ * 质量远超规则器（长实体、中文命名体、隐式关系都能抽），
+ * 代价是每次语义记忆写入 +1 次 LLM 调用——设计为 opt-in 注入，规则器仍是默认。
+ * LLM 抛错时降级规则器并提醒（降级提醒原则）。
+ */
+export class LLMEntityExtractor implements EntityExtractor {
+  private warned = false;
+
+  constructor(
+    private readonly llm: import("../../core/llm").ChatLLM,
+    private readonly fallback: EntityExtractor = new RuleBasedEntityExtractor(),
+  ) {}
+
+  async extract(content: string): Promise<{
+    entities: ExtractedEntity[];
+    relations: ExtractedRelation[];
+  }> {
+    try {
+      const response = await this.llm.invoke([
+        {
+          role: "system",
+          content:
+            "从文本中抽取实体和实体间关系，只输出 JSON，不要解释，格式：" +
+            '{"entities":[{"name":"实体名","type":"类型"}],"relations":[{"source":"实体A","target":"实体B","relation":"关系"}]}' +
+            "。类型用 CONCEPT/PERSON/ORG/TERM/WORK 等简短标签；只抽取文本明确出现的实体。",
+        },
+        { role: "user", content },
+      ]);
+      const parsed = parseJsonBlock(response);
+      const entities = (parsed.entities ?? [])
+        .map((entity) => ({
+          name: String(entity.name ?? "").trim(),
+          type: String(entity.type ?? "CONCEPT").trim() || "CONCEPT",
+        }))
+        .filter((entity) => entity.name.length >= 2 && entity.name.length <= 32);
+      const knownNames = new Set(entities.map((entity) => entity.name));
+      const relations = (parsed.relations ?? [])
+        .map((relation) => ({
+          sourceName: String(relation.source ?? "").trim(),
+          targetName: String(relation.target ?? "").trim(),
+          relation: String(relation.relation ?? "RELATED_TO").trim() || "RELATED_TO",
+        }))
+        .filter(
+          (relation) =>
+            knownNames.has(relation.sourceName) && knownNames.has(relation.targetName),
+        );
+      if (entities.length > 0) {
+        return { entities, relations };
+      }
+    } catch (error) {
+      if (!this.warned) {
+        this.warned = true;
+        console.warn(
+          `⚠️ [实体抽取降级] LLM 抽取失败（${error instanceof Error ? error.message : String(error)}），本次使用规则抽取器`,
+        );
+      }
+      return this.fallback.extract(content);
+    }
+    // 合法 JSON 但零实体 → 规则器兜底（LLM 偶尔过度保守）
+    return this.fallback.extract(content);
+  }
+}
+
+/** 提取回复中第一个 JSON 对象块（容忍 markdown 代码围栏与前后废话） */
+function parseJsonBlock(response: string): LlmExtractionResult {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(response);
+  const candidate = fenced?.[1] ?? response;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start === -1 || end <= start) throw new Error("响应中没有 JSON 对象");
+  return JSON.parse(candidate.slice(start, end + 1)) as LlmExtractionResult;
 }
 
 /** 规则抽取器：中文术语 + 英文专名 + 句内共现 RELATED_TO */
 export class RuleBasedEntityExtractor implements EntityExtractor {
-  extract(content: string): {
+  async extract(content: string): Promise<{
     entities: ExtractedEntity[];
     relations: ExtractedRelation[];
-  } {
+  }> {
     const entities = extractEntities(content);
     const relations: ExtractedRelation[] = [];
 
@@ -143,7 +223,7 @@ export class SemanticMemory extends BaseMemory {
       this.collectionReady = true;
     }
     const embedding = await embedOne(this.embedder, item.content);
-    const { entities, relations } = this.extractor.extract(item.content);
+    const { entities, relations } = await this.extractor.extract(item.content);
 
     // 图谱写入：实体挂 memoryIds，关系带来源
     for (const entity of entities) {
@@ -196,7 +276,7 @@ export class SemanticMemory extends BaseMemory {
     });
 
     // 2) 图检索：查询实体 → 关联记忆 ID → 从向量库取记录
-    const { entities: queryEntities } = this.extractor.extract(query);
+    const { entities: queryEntities } = await this.extractor.extract(query);
     const queryEntityNames = new Set(queryEntities.map((entity) => entity.name));
     const graphMemoryIds = queryEntityNames.size
       ? await this.graph.getMemoryIdsForEntities([...queryEntityNames])
