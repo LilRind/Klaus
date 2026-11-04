@@ -14,6 +14,7 @@ import type { ChatLLM } from "../../core/llm";
 import type { VectorStore } from "../../memory/storage/vector-store";
 import { createDefaultVectorStore } from "../../memory/storage/factories";
 import { MemoryManager } from "../../memory/manager";
+import { createDefaultReranker, type Reranker } from "../../memory/rag/rerank";
 
 export interface RAGToolOptions {
   knowledgeBasePath?: string;
@@ -32,6 +33,8 @@ export interface RAGToolOptions {
   memoryManager?: MemoryManager;
   /** ask 时默认自动保存检索结果（不必每次传 save_to_memory） */
   autoSaveToMemory?: boolean;
+  /** Rerank 精排器；不传时若 .env 配了 RERANK_MODEL_NAME 则自动装配 */
+  reranker?: Reranker;
 }
 
 interface RAGActionPayload {
@@ -87,6 +90,7 @@ export class RAGTool extends Tool {
       vectorStore,
       embedder,
       llm: options.llm,
+      reranker: options.reranker ?? createDefaultReranker(),
       ragNamespace: options.ragNamespace ?? "default",
       chunkTokens: options.chunkTokens,
       overlapTokens: options.overlapTokens,
@@ -143,6 +147,7 @@ export class RAGTool extends Tool {
       topK: numberField(payload.top_k) ?? 5,
       enableMqe: Boolean(payload.enable_mqe),
       enableHyde: Boolean(payload.enable_hyde),
+      enableRerank: Boolean(payload.enable_rerank),
       scoreThreshold: numberField(payload.score_threshold),
     });
     if (hits.length === 0) return "🔍 知识库中未找到相关内容";
@@ -161,6 +166,7 @@ export class RAGTool extends Tool {
       topK: numberField(payload.top_k) ?? 5,
       enableMqe: Boolean(payload.enable_mqe),
       enableHyde: Boolean(payload.enable_hyde),
+      enableRerank: Boolean(payload.enable_rerank),
     });
     const sources = result.sources
       .map(

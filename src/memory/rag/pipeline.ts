@@ -14,6 +14,7 @@ import { OpenAICompatLLM } from "../../core/llm";
 import { embedOne, type EmbeddingService } from "../embedding";
 import type { VectorStore } from "../storage/vector-store";
 import { chunkText, loadDocument, type DocumentChunk } from "./document";
+import type { Reranker } from "./rerank";
 
 export interface RAGChunkMetadata extends Record<string, unknown> {
   memory_type: "rag_chunk";
@@ -33,6 +34,8 @@ export interface RAGPipelineOptions {
   embedder: EmbeddingService;
   /** 问答与查询扩展用的 LLM；不传则懒创建（读 .env） */
   llm?: ChatLLM;
+  /** Rerank 精排器（可选）；启用后 search 的 enableRerank 生效 */
+  reranker?: Reranker;
   ragNamespace?: string;
   chunkTokens?: number;
   overlapTokens?: number;
@@ -70,6 +73,8 @@ export interface RAGSearchOptions {
   enableHyde?: boolean;
   /** 候选池倍率（默认 4，对应书 candidate_pool_multiplier） */
   candidatePoolMultiplier?: number;
+  /** Rerank 精排（可选）：召回 pool 后交叉打分重排，取 topK */
+  enableRerank?: boolean;
 }
 
 export interface RAGAnswer {
@@ -86,12 +91,14 @@ export class RAGPipeline {
   private llmInstance?: ChatLLM;
   private readonly chunkTokens: number;
   private readonly overlapTokens: number;
+  private readonly reranker?: Reranker;
 
   constructor(options: RAGPipelineOptions) {
     this.ragNamespace = options.ragNamespace ?? "default";
     this.vectors = options.vectorStore;
     this.embedder = options.embedder;
     this.lazyLlm = options.llm;
+    this.reranker = options.reranker;
     this.chunkTokens = options.chunkTokens ?? 1000;
     this.overlapTokens = options.overlapTokens ?? 200;
   }
@@ -202,9 +209,25 @@ export class RAGPipeline {
       }
     }
 
-    return [...aggregated.values()]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, topK);
+    const ranked = [...aggregated.values()].sort((a, b) => b.score - a.score);
+    if (!options.enableRerank || !this.reranker) return ranked.slice(0, topK);
+
+    // 二级检索：向量召回扩池 → rerank 精排 → topK
+    const rerankPool = ranked.slice(0, Math.max(topK * 3, 10));
+    try {
+      const scores = await this.reranker.rerank(query, rerankPool.map((hit) => hit.content));
+      const reranked = rerankPool
+        .map((hit, index) => ({ hit, score: scores[index] ?? 0 }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, topK);
+      return reranked.map(({ hit, score }) => ({ ...hit, score }));
+    } catch (error) {
+      // 降级提醒原则：rerank 失败回退向量序，明确告知
+      console.warn(
+        `⚠️ [Rerank 降级] 精排调用失败（${error instanceof Error ? error.message : String(error)}），本次沿用向量召回排序`,
+      );
+      return rerankPool.slice(0, topK);
+    }
   }
 
   /** 智能问答：检索 → 上下文构建 → LLM 生成（书 8.4 问答核心） */

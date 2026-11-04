@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import { InMemoryGraphStore } from "../src/memory/storage/graph-store";
 import { MemoryManager } from "../src/memory/manager";
 import { TFIDFEmbedding } from "../src/memory/embedding";
 import { ScriptedLLM } from "./scripted-llm";
+import type { Reranker } from "../src/memory/rag/rerank";
 
 describe("文档处理层（书 8.3.4）", () => {
   it("token 估算：CJK 每字 1，拉丁约 4 字符 1", () => {
@@ -203,6 +204,53 @@ describe("RAGPipeline（书 8.3.4/8.3.5）", () => {
     expect((await pipeline.stats()).chunks).toBeGreaterThan(0);
     await pipeline.clear();
     expect((await pipeline.stats()).chunks).toBe(0);
+  });
+
+  it("Rerank 精排：重排命中顺序，score 换用精排分", async () => {
+    // 桩：给"感知记忆"文档打最高分，反转向量序
+    const reranker: Reranker = {
+      rerank: async (_query, documents) =>
+        documents.map((doc) => (doc.includes("感知记忆") ? 0.99 : 0.05)),
+    };
+    const pipeline = new RAGPipeline({
+      vectorStore: new InMemoryVectorStore(),
+      embedder: new TFIDFEmbedding(),
+      reranker,
+      ragNamespace: "rerank",
+    });
+    await pipeline.ingest({
+      text: [
+        "# 记忆类型",
+        "工作记忆容量有限默认 50 条。",
+        "情景记忆存事件与经历。",
+        "感知记忆处理多模态数据。",
+        "语义记忆存抽象知识。",
+      ].join("\n"),
+    });
+
+    const hits = await pipeline.search("记忆", { topK: 2, enableRerank: true });
+    expect(hits[0]?.content).toContain("感知记忆");
+    expect(hits[0]?.score).toBeCloseTo(0.99, 5);
+  });
+
+  it("Rerank 失败降级：提醒并沿用向量召回序", async () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const reranker: Reranker = {
+      rerank: async () => {
+        throw new Error("rerank service down");
+      },
+    };
+    const pipeline = new RAGPipeline({
+      vectorStore: new InMemoryVectorStore(),
+      embedder: new TFIDFEmbedding(),
+      reranker,
+      ragNamespace: "rerank-fail",
+    });
+    await pipeline.ingest({ text: "工作记忆容量有限默认 50 条，TTL 60 分钟。" });
+    const hits = await pipeline.search("工作记忆", { topK: 1, enableRerank: true });
+    expect(hits[0]?.content).toContain("工作记忆");
+    expect(String(spy.mock.calls[0]?.[0])).toContain("Rerank 降级");
+    spy.mockRestore();
   });
 });
 
