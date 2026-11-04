@@ -8,6 +8,36 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+
+// 经 createRequire 走 CJS 构建（Node 专用版），避免 vite/vitest 误选 browser 分支
+const nodeRequire = createRequire(import.meta.url);
+
+/** 可注入的 PDF/DOCX 解析器（测试与替换实现用） */
+export interface DocumentParserOptions {
+  pdfParser?: (buffer: Buffer) => Promise<string>;
+  docxParser?: (buffer: Buffer) => Promise<string>;
+}
+
+async function parsePdf(buffer: Buffer): Promise<string> {
+  interface PdfTextResult { text: string }
+  interface PdfParseInstance { getText(): Promise<PdfTextResult>; destroy(): Promise<void> }
+  type PdfParseCtor = new (options: { data: Uint8Array }) => PdfParseInstance;
+  const { PDFParse } = nodeRequire("pdf-parse") as { PDFParse: PdfParseCtor };
+  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  try {
+    const result = await parser.getText();
+    return result.text;
+  } finally {
+    await parser.destroy();
+  }
+}
+
+async function parseDocx(buffer: Buffer): Promise<string> {
+  const mammoth = (await import("mammoth")) as typeof import("mammoth");
+  const result = await mammoth.extractRawText({ buffer });
+  return result.value;
+}
 
 export interface DocumentParagraph {
   content: string;
@@ -24,9 +54,9 @@ export interface DocumentChunk {
 }
 
 export interface ChunkOptions {
-  /** 每块目标 token 数（默认 512，对应书 chunk_tokens） */
+  /** 每块目标 token 数（默认 1000，对齐书 8.4 助手的 chunk_size=1000 字符；CJK 1 字 ≈ 1 token） */
   chunkTokens?: number;
-  /** 相邻块重叠 token 数（默认 64，保持上下文连续性） */
+  /** 相邻块重叠 token 数（默认 200，对齐书 8.4 的 chunk_overlap=200） */
   overlapTokens?: number;
 }
 
@@ -42,16 +72,33 @@ const SUPPORTED_EXTENSIONS = new Set([
   ".ts",
   ".js",
   ".py",
+  ".pdf",
+  ".docx",
 ]);
 
-/** 读取文件并统一为文本（MarkItDown 的轻量等价物） */
-export async function loadDocument(filePath: string): Promise<string> {
+/**
+ * 读取文件并统一为文本（MarkItDown 的轻量等价物）：
+ * PDF（pdf-parse）/ DOCX（mammoth）/ 其余原生格式直读。
+ * OCR/音频保持"外部转 Markdown 后摄取"约定（见 第8章剩余事项.md）。
+ */
+export async function loadDocument(
+  filePath: string,
+  parsers: DocumentParserOptions = {},
+): Promise<string> {
   const extension = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
   if (!SUPPORTED_EXTENSIONS.has(extension)) {
     throw new Error(
       `暂不支持 ${extension} 格式（TS 版支持 ${[...SUPPORTED_EXTENSIONS].join("/")}）。` +
-        `PDF/DOCX 请先转换为 Markdown 再摄取——对应书里 MarkItDown 的转换步骤。`,
+        `图片/音频请先用外部工具转 Markdown 再摄取（对应书里 MarkItDown 的 OCR/转录步骤）。`,
     );
+  }
+  if (extension === ".pdf") {
+    const buffer = await readFile(filePath);
+    return (parsers.pdfParser ?? parsePdf)(buffer);
+  }
+  if (extension === ".docx") {
+    const buffer = await readFile(filePath);
+    return (parsers.docxParser ?? parseDocx)(buffer);
   }
   const raw = await readFile(filePath, "utf-8");
   if (extension === ".html" || extension === ".htm" || extension === ".xml") {
@@ -131,8 +178,8 @@ export function splitParagraphsWithHeadings(text: string): DocumentParagraph[] {
 /** Token 预算分块 + 尾部重叠（书 _chunk_paragraphs 的直译） */
 export function chunkParagraphs(
   paragraphs: DocumentParagraph[],
-  chunkTokens = 512,
-  overlapTokens = 64,
+  chunkTokens = 1000,
+  overlapTokens = 200,
 ): DocumentChunk[] {
   const chunks: DocumentChunk[] = [];
   let current: DocumentParagraph[] = [];
@@ -186,7 +233,7 @@ export function chunkText(
 ): DocumentChunk[] {
   return chunkParagraphs(
     splitParagraphsWithHeadings(text),
-    options.chunkTokens ?? 512,
+    options.chunkTokens ?? 1000,
     options.overlapTokens ?? 64,
   );
 }

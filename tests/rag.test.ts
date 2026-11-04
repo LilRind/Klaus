@@ -52,7 +52,7 @@ describe("文档处理层（书 8.3.4）", () => {
     expect(overlap).toBe(true);
   });
 
-  it("loadDocument 支持 md/html/json，拒绝 PDF 并提示转换", async () => {
+  it("loadDocument 支持 md/html/json，未知格式提示外部转换", async () => {
     const dir = await mkdtemp(join(tmpdir(), "rag-doc-"));
     await writeFile(join(dir, "note.md"), "# 标题\n内容", "utf-8");
     await writeFile(join(dir, "page.html"), "<h1>标题</h1><p>正文</p>", "utf-8");
@@ -68,9 +68,61 @@ describe("文档处理层（书 8.3.4）", () => {
     expect(json).toContain("张三");
     expect(json).toContain("tags");
 
-    await expect(loadDocument(join(dir, "paper.pdf"))).rejects.toThrow(/暂不支持/);
+    await expect(loadDocument(join(dir, "photo.webp"))).rejects.toThrow(/暂不支持/);
+  });
+
+  it("PDF 摄取：真实 pdf-parse 解析手工构造的最小 PDF", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "rag-pdf-"));
+    const filePath = join(dir, "sample.pdf");
+    await writeFile(filePath, buildMinimalPdf("HelloAgents PDF test"));
+    const text = await loadDocument(filePath);
+    expect(text).toContain("HelloAgents PDF test");
+  });
+
+  it("PDF/DOCX 解析器可注入替换（路由测试）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "rag-route-"));
+    const pdfPath = join(dir, "fake.pdf");
+    const docxPath = join(dir, "fake.docx");
+    await writeFile(pdfPath, "binary-ish");
+    await writeFile(docxPath, "binary-ish");
+
+    let pdfCalled = false;
+    let docxCalled = false;
+    const text = await Promise.all([
+      loadDocument(pdfPath, { pdfParser: async () => { pdfCalled = true; return "PDF 文本"; } }),
+      loadDocument(docxPath, { docxParser: async () => { docxCalled = true; return "DOCX 文本"; } }),
+    ]);
+    expect(pdfCalled).toBe(true);
+    expect(docxCalled).toBe(true);
+    expect(text).toEqual(["PDF 文本", "DOCX 文本"]);
   });
 });
+
+/** 手工构造带正确 xref 偏移的最小 PDF（单页 Helvetica 文本），供真实 pdf-parse 解析 */
+function buildMinimalPdf(text: string): Buffer {
+  const escaped = text.replace(/([()\\])/g, "\\$1");
+  const content = `BT /F1 24 Tf 72 720 Td (${escaped}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objects.forEach((body, index) => {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) {
+    pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, "latin1");
+}
 
 describe("RAGPipeline（书 8.3.4/8.3.5）", () => {
   function buildPipeline(namespace = "test", llm?: ScriptedLLM) {

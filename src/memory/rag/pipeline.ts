@@ -92,8 +92,8 @@ export class RAGPipeline {
     this.vectors = options.vectorStore;
     this.embedder = options.embedder;
     this.lazyLlm = options.llm;
-    this.chunkTokens = options.chunkTokens ?? 512;
-    this.overlapTokens = options.overlapTokens ?? 64;
+    this.chunkTokens = options.chunkTokens ?? 1000;
+    this.overlapTokens = options.overlapTokens ?? 200;
   }
 
   /** 摄取：文本/文件 → 分块 → 向量化 → 入库 */
