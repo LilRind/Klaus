@@ -18,7 +18,11 @@
     "example:plan": "tsx examples/plan-solve-agent.ts",
     "example:functioncall": "tsx examples/function-call-agent.ts",
     "example:search": "tsx examples/advanced-search.ts",
-    "example:chain": "tsx examples/tool-chain.ts"
+    "example:chain": "tsx examples/tool-chain.ts",
+    "example:memory-basic": "tsx examples/memory-basic.ts",
+    "example:memory-types": "tsx examples/memory-types.ts",
+    "example:rag": "tsx examples/rag-pipeline.ts",
+    "example:memory-rag-agent": "tsx examples/memory-rag-agent.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

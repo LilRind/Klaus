@@ -1,9 +1,9 @@
 # HelloAgents-TS
 
-《Hello Agents》第 7 章「构建你的智能体框架」的 TypeScript 从零实现。
+《Hello Agents》第 7 章「构建你的智能体框架」与第 8 章「记忆与检索」的 TypeScript 从零实现。
 练习原书：[datawhalechina/Hello-Agents](https://github.com/datawhalechina/Hello-Agents)（框架原版参考：[jjyaoao/helloagents](https://github.com/jjyaoao/helloagents)）。
 不依赖书里的 `hello-agents` Python 包，所有核心层代码按章节架构重写，
-用 vitest + 可注入的 LLM 桩实现全离线测试（46 个用例，跑测试不需要 API Key）。
+用 vitest + 可注入的 LLM 桩实现全离线测试（133 个用例，跑测试不需要 API Key）。
 
 ## 与书第 7 章的对应关系
 
@@ -22,6 +22,34 @@
 | 7.5 工具系统 | `src/tools/*` | Tool 基类 / ToolRegistry / 递归下降计算器（对标书的 `ast.parse` 安全求值） |
 | 7.5.3 多源搜索 | `src/tools/builtin/search.ts` | Tavily/SerpApi 双源降级，fetch 与 env 可注入（测试零网络） |
 | 7.5.4 工具链/异步执行 | `src/tools/chain.ts` `src/tools/async-executor.ts` | 输出键传递数据的 ToolChain + 有界并行 AsyncToolExecutor |
+
+## 与书第 8 章的对应关系
+
+| 书章节 | 本项目文件 | 说明 |
+|---|---|---|
+| 8.1.3/8.1.4 记忆与 RAG 架构 | `src/memory/base.ts` | MemoryItem / MemoryConfig / BaseMemory 四层架构的地基 |
+| 8.2.2 快速体验 | `examples/memory-basic.ts` | MemoryTool 九个 action 全链路（add/search/summary/stats/update/remove/forget/consolidate/clear_all） |
+| 8.2.3 MemoryTool | `src/tools/builtin/memory-tool.ts` | JSON 统一入口 + 会话 ID 自动管理 + 感知模态推断 |
+| 8.2.4 MemoryManager | `src/memory/manager.ts` | 四类型统一调度、三种遗忘策略、记忆固化（working→episodic→semantic） |
+| 8.2.5 工作记忆 | `src/memory/types/working.ts` | 纯内存 + TTL + 容量淘汰 + TF-IDF/关键词混合检索 |
+| 8.2.5 情景记忆 | `src/memory/types/episodic.ts` | SQLite 文档库 + 向量库混合，评分 `(向量×0.8+近因×0.2)×重要性权重` |
+| 8.2.5 语义记忆 | `src/memory/types/semantic.ts` | 向量 + 图谱混合 `(向量×0.7+图×0.3)×重要性权重`；实体抽取用规则器替代 spaCy（接口可换 LLM 抽取） |
+| 8.2.5 感知记忆 | `src/memory/types/perceptual.ts` | 多模态元数据 + 模态过滤；CLIP/CLAP 的 TS 等价物是描述文本统一嵌入（差异已注释） |
+| 8.3.4 RAG 管道 | `src/memory/rag/pipeline.ts` `src/memory/rag/document.ts` | Markdown 结构感知分块（标题层级/Token 预算/重叠）+ 摄取 + 检索 + LLM 问答；MarkItDown 的 TS 替代支持 md/txt/json/csv/html |
+| 8.3.5 高级检索 | 同上 `RAGPipeline.search` | MQE 多查询扩展 + HyDE 假设文档，"扩展-检索-合并"三步 + memory_id 去重 |
+| 8.4 智能问答助手 | `examples/memory-rag-agent.ts` `examples/rag-pipeline.ts` | SimpleAgent + ToolRegistry 注册 MemoryTool/RAGTool，Agent 自主调用两个工具 |
+
+**与书的技术栈差异**（结构对齐，生态替换）：
+
+| 书（Python） | 本项目（TS） | 说明 |
+|---|---|---|
+| `hello-agents[all]` pip 包 | 本仓库自带 `src/` | 框架即项目，无需装包 |
+| Qdrant（云/Docker） | `VectorStore` 接口 + InMemory 实现 | 接口对齐书里的存储后端层；Qdrant 真实后端接入见下 |
+| Neo4j（云/Docker） | `GraphStore` 接口 + InMemory 实现 | 同上 |
+| SQLite（Python sqlite3） | `node:sqlite`（Node 24 内置） | 零原生依赖 |
+| DashScope/本地模型/TFIDF 三级嵌入 | OpenAI 兼容端点 / TFIDF | Ollama 的 `/v1/embeddings` 走 OpenAI 兼容实现 |
+| spaCy 中英文 NER | 规则实体抽取器（可注入） | 确定性规则，测试友好 |
+| MarkItDown（PDF/Office/图片） | md/txt/json/csv/html 原生解析 | PDF/DOCX 先转 Markdown 再摄取，管道结构一致 |
 
 ## 目录结构
 
@@ -68,7 +96,16 @@ npm run example:basic        # 最小 LLM 调用
 npm run example:simple       # SimpleAgent + 计算器
 npm run example:react        # ReAct 循环（Thought/Action/Observation）
 npm run check:config         # 只验证 .env 检测，不调 API
+npm run example:memory-basic # 第八章：MemoryTool 九操作（离线可跑）
+npm run example:memory-types # 第八章：四种记忆类型深度演示（离线可跑）
+npm run example:rag          # 第八章：RAG 管道（检索离线可跑，问答需 LLM）
+npm run example:memory-rag-agent # 第八章：Agent 集成记忆+RAG（需 LLM）
 ```
+
+第八章的存储默认走进程内实现（零配置离线跑通）。要接真实 Qdrant / Neo4j，
+按 `.env.example` 第八章段落配置 `QDRANT_*` / `NEO4J_*` 并注入对应
+`VectorStore` / `GraphStore` 实现（接口与内存版完全一致）。
+注意向量维度必须与嵌入模型一致（书里同样的坑：`QDRANT_VECTOR_SIZE`）。
 
 ### 最小示例
 
