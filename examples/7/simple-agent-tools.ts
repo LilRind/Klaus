@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { OpenAICompatLLM, SimpleAgent, ToolRegistry, CalculatorTool } from "../src/index";
+import { OpenAICompatLLM, SimpleAgent, ToolRegistry, CalculatorTool } from "../../src/index";
 
 const llm = new OpenAICompatLLM();
 const registry = new ToolRegistry().register(new CalculatorTool());

@@ -8,7 +8,7 @@ import {
   SimpleAgent,
   ToolRegistry,
   CalculatorTool,
-} from "../src/index";
+} from "../../src/index";
 
 // 加载环境变量后创建 LLM 实例 - 框架自动检测 provider
 const llm = new OpenAICompatLLM();

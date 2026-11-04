@@ -10,7 +10,7 @@
 | 书章节 | 本项目文件 | 说明 |
 |---|---|---|
 | 7.2 HelloAgentsLLM / 多提供商 / 自动检测 | `src/core/llm.ts` | `ChatLLM` 接口 + `OpenAICompatLLM` 默认实现，`detectProvider()` 复刻 7.2.3 检测优先级 |
-| 7.2 my_main.py 流式验证 | `examples/streaming.ts` | LLM 裸流式 + Agent 级 `streamRun`，对标书的 `think` 流式输出 |
+| 7.2 my_main.py 流式验证 | `examples/7/streaming.ts` | LLM 裸流式 + Agent 级 `streamRun`，对标书的 `think` 流式输出 |
 | 7.3.1 Message | `src/core/message.ts` | 角色联合类型 = Python `Literal` 的编译期等价物，运行期再兜底校验 |
 | 7.3.2 Config | `src/core/config.ts` | 循环上限 / 超时 / 温度集中管理 |
 | 7.3.3 Agent ABC | `src/core/agent.ts` | 身份 + llm 依赖 + 跨轮 history，`run()` 留给子类 |
@@ -28,7 +28,7 @@
 | 书章节 | 本项目文件 | 说明 |
 |---|---|---|
 | 8.1.3/8.1.4 记忆与 RAG 架构 | `src/memory/base.ts` | MemoryItem / MemoryConfig / BaseMemory 四层架构的地基 |
-| 8.2.2 快速体验 | `examples/memory-basic.ts` | MemoryTool 九个 action 全链路（add/search/summary/stats/update/remove/forget/consolidate/clear_all） |
+| 8.2.2 快速体验 | `examples/8/memory-basic.ts` | MemoryTool 九个 action 全链路（add/search/summary/stats/update/remove/forget/consolidate/clear_all） |
 | 8.2.3 MemoryTool | `src/tools/builtin/memory-tool.ts` | JSON 统一入口 + 会话 ID 自动管理 + 感知模态推断 |
 | 8.2.4 MemoryManager | `src/memory/manager.ts` | 四类型统一调度、三种遗忘策略、记忆固化（working→episodic→semantic） |
 | 8.2.5 工作记忆 | `src/memory/types/working.ts` | 纯内存 + TTL + 容量淘汰 + TF-IDF/关键词混合检索 |
@@ -37,7 +37,7 @@
 | 8.2.5 感知记忆 | `src/memory/types/perceptual.ts` | 多模态元数据 + 模态过滤；CLIP/CLAP 的 TS 等价物是描述文本统一嵌入（差异已注释） |
 | 8.3.4 RAG 管道 | `src/memory/rag/pipeline.ts` `src/memory/rag/document.ts` | Markdown 结构感知分块（标题层级/Token 预算/重叠）+ 摄取 + 检索 + LLM 问答；MarkItDown 的 TS 替代支持 md/txt/json/csv/html |
 | 8.3.5 高级检索 | 同上 `RAGPipeline.search` | MQE 多查询扩展 + HyDE 假设文档，"扩展-检索-合并"三步 + memory_id 去重 |
-| 8.4 智能问答助手 | `examples/memory-rag-agent.ts` `examples/rag-pipeline.ts` | SimpleAgent + ToolRegistry 注册 MemoryTool/RAGTool，Agent 自主调用两个工具 |
+| 8.4 智能问答助手 | `examples/8/memory-rag-agent.ts` `examples/8/rag-pipeline.ts` | SimpleAgent + ToolRegistry 注册 MemoryTool/RAGTool，Agent 自主调用两个工具 |
 | 8.1.4 存储后端层 | `src/memory/storage/qdrant-store.ts` `neo4j-store.ts` | Qdrant（`@qdrant/js-client-rest`）与 Neo4j（`neo4j-driver`）真实后端，与内存版同接口 |
 
 **与书的技术栈差异**（结构对齐，生态替换）：
@@ -78,7 +78,7 @@ hello-agents-ts/
 │       ├── chain.ts             # 工具链（输出键传递数据）
 │       └── async-executor.ts    # 有界并行执行器
 ├── tests/                       # vitest 全离线（ScriptedLLM 桩）
-├── examples/                    # basic-chat / simple-agent / react-agent
+├── examples/                    # 按章节组织：7/ 第7章示例，8/ 第8章示例
 └── vitest.config.ts
 ```
 
@@ -97,10 +97,11 @@ npm run example:basic        # 最小 LLM 调用
 npm run example:simple       # SimpleAgent + 计算器
 npm run example:react        # ReAct 循环（Thought/Action/Observation）
 npm run check:config         # 只验证 .env 检测，不调 API
-npm run example:memory-basic # 第八章：MemoryTool 九操作（离线可跑）
+npm run example:memory-basic # 第八章（examples/8/）：MemoryTool 九操作（离线可跑）
 npm run example:memory-types # 第八章：四种记忆类型深度演示（离线可跑）
 npm run example:rag          # 第八章：RAG 管道（检索离线可跑，问答需 LLM）
 npm run example:memory-rag-agent # 第八章：Agent 集成记忆+RAG（需 LLM）
+npm run example:memory-live  # 第八章：Qdrant/Neo4j/SQLite 真实三库联机验证
 ```
 
 第八章的存储走**默认装配工厂**（`storage/factories.ts`）：`.env` 配了

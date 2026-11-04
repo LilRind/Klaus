@@ -3,7 +3,7 @@
  * 展示两个层级：LLM 裸流式 / SimpleAgent.streamRun
  */
 import "dotenv/config";
-import { OpenAICompatLLM, SimpleAgent, ToolRegistry, CalculatorTool } from "../src/index";
+import { OpenAICompatLLM, SimpleAgent, ToolRegistry, CalculatorTool } from "../../src/index";
 
 const llm = new OpenAICompatLLM();
 console.log(`provider: ${llm.provider} | model: ${llm.model}\n`);

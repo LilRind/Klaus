@@ -16,10 +16,10 @@ import {
   MemoryManager,
   TFIDFEmbedding,
   createMemoryItem,
-} from "../src/index";
-import { WorkingMemory } from "../src/memory/types/working";
-import { RuleBasedEntityExtractor } from "../src/memory/types/semantic";
-import { inferModality } from "../src/memory/types/perceptual";
+} from "../../src/index";
+import { WorkingMemory } from "../../src/memory/types/working";
+import { RuleBasedEntityExtractor } from "../../src/memory/types/semantic";
+import { inferModality } from "../../src/memory/types/perceptual";
 
 async function main() {
   const embedder = new TFIDFEmbedding();

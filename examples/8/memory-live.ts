@@ -14,12 +14,12 @@ import {
   MemoryManager,
   RAGPipeline,
   TFIDFEmbedding,
-} from "../src/index";
+} from "../../src/index";
 import {
   createDefaultDocumentStore,
   createDefaultGraphStore,
   createDefaultVectorStore,
-} from "../src/memory/storage/factories";
+} from "../../src/memory/storage/factories";
 
 async function main() {
   const embedder = new TFIDFEmbedding();

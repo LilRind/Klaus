@@ -7,9 +7,9 @@
  */
 
 import "dotenv/config";
-import { OpenAICompatLLM, SimpleAgent, ToolRegistry } from "../src/index";
-import { MemoryTool } from "../src/tools/builtin/memory-tool";
-import { RAGTool } from "../src/tools/builtin/rag-tool";
+import { OpenAICompatLLM, SimpleAgent, ToolRegistry } from "../../src/index";
+import { MemoryTool } from "../../src/tools/builtin/memory-tool";
+import { RAGTool } from "../../src/tools/builtin/rag-tool";
 
 async function main() {
   const llm = new OpenAICompatLLM();

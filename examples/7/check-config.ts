@@ -1,6 +1,6 @@
 /** 配置自检：只验证 .env 检测结果，不发起任何 API 请求 */
 import "dotenv/config";
-import { OpenAICompatLLM } from "../src/index";
+import { OpenAICompatLLM } from "../../src/index";
 
 try {
   const llm = new OpenAICompatLLM();

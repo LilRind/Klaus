@@ -1,6 +1,6 @@
 /** ReflectionAgent 示例（对应书 7.4.3 test_reflection_agent.py） */
 import "dotenv/config";
-import { AgentConfig, OpenAICompatLLM, ReflectionAgent } from "../src/index";
+import { AgentConfig, OpenAICompatLLM, ReflectionAgent } from "../../src/index";
 
 // glm-5.3 是思考型模型：写长文前会生成大量隐藏推理，非流式调用容易超过 60s。
 // 这里用 extraBody 关闭思考模式换取速度（智谱专有参数，框架层只做透传）。

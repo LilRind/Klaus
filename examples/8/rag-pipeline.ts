@@ -10,10 +10,10 @@ import "dotenv/config";
 import { writeFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RAGPipeline } from "../src/memory/rag/pipeline";
-import { InMemoryVectorStore } from "../src/memory/storage/vector-store";
-import { TFIDFEmbedding } from "../src/memory/embedding";
-import { chunkText } from "../src/memory/rag/document";
+import { RAGPipeline } from "../../src/memory/rag/pipeline";
+import { InMemoryVectorStore } from "../../src/memory/storage/vector-store";
+import { TFIDFEmbedding } from "../../src/memory/embedding";
+import { chunkText } from "../../src/memory/rag/document";
 
 const KNOWLEDGE = [
   "# HelloAgents 记忆系统",

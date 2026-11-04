@@ -7,7 +7,7 @@
  */
 
 import "dotenv/config";
-import { MemoryTool } from "../src/tools/builtin/memory-tool";
+import { MemoryTool } from "../../src/tools/builtin/memory-tool";
 
 async function main() {
   const tool = new MemoryTool({

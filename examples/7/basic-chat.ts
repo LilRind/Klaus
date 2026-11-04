@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { OpenAICompatLLM } from "../src/index";
+import { OpenAICompatLLM } from "../../src/index";
 
 const llm = new OpenAICompatLLM();
 console.log(`检测到 provider: ${llm.provider}, model: ${llm.model}`);

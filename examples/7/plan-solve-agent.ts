@@ -1,6 +1,6 @@
 /** PlanAndSolveAgent 示例（对应书 7.4.4 test_plan_solve_agent.py 的水果店问题） */
 import "dotenv/config";
-import { OpenAICompatLLM, PlanAndSolveAgent } from "../src/index";
+import { OpenAICompatLLM, PlanAndSolveAgent } from "../../src/index";
 
 const llm = new OpenAICompatLLM();
 const agent = new PlanAndSolveAgent("我的规划执行助手", llm);

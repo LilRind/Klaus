@@ -5,7 +5,7 @@ import {
   AsyncToolExecutor,
   ToolRegistry,
   CalculatorTool,
-} from "../src/index";
+} from "../../src/index";
 
 const registry = new ToolRegistry()
   .register(new CalculatorTool())
