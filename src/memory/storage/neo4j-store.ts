@@ -25,6 +25,7 @@ export interface Neo4jStoreOptions {
 
 export class Neo4jGraphStore implements GraphStore {
   private driver?: Driver;
+  private initialized = false;
   private readonly options: Neo4jStoreOptions;
 
   constructor(options: Neo4jStoreOptions) {
@@ -33,6 +34,7 @@ export class Neo4jGraphStore implements GraphStore {
 
   /** 建连 + 实体名唯一约束（对应书 "Neo4j索引创建完成"） */
   async init(): Promise<void> {
+    if (this.initialized) return;
     await this.withSession(async (session) => {
       await session.run(
         "CREATE CONSTRAINT entity_name_unique IF NOT EXISTS " +
@@ -40,6 +42,12 @@ export class Neo4jGraphStore implements GraphStore {
       );
     });
     await this.getDriver().verifyConnectivity();
+    this.initialized = true;
+  }
+
+  /** 惰性初始化：Manager 构造是同步的，首个操作前自检（连接 + 唯一约束） */
+  private async ensureInit(): Promise<void> {
+    if (!this.initialized) await this.init();
   }
 
   private getDriver(): Driver {
@@ -66,15 +74,14 @@ export class Neo4jGraphStore implements GraphStore {
   }
 
   async addEntity(entity: GraphEntity): Promise<void> {
+    await this.ensureInit();
     await this.withSession(async (session) => {
       // MERGE 幂等：已存在则把新 memoryId 并入数组（Cypher 端去重）
       await session.run(
         `MERGE (e:MemoryEntity {name: $name})
-         ON CREATE SET e.type = $type, e.memoryIds = $memoryIds
-         WITH e
-         UNWIND $memoryIds AS mid
-         WHERE NOT mid IN e.memoryIds
-         SET e.memoryIds = coalesce(e.memoryIds, []) + mid`,
+         WITH e, [mid IN $memoryIds WHERE NOT mid IN coalesce(e.memoryIds, [])] AS newIds
+         SET e.memoryIds = coalesce(e.memoryIds, []) + newIds,
+             e.type = coalesce(e.type, $type)`,
         {
           name: entity.name,
           type: entity.type,
@@ -85,6 +92,7 @@ export class Neo4jGraphStore implements GraphStore {
   }
 
   async addRelation(relation: GraphRelation): Promise<void> {
+    await this.ensureInit();
     await this.withSession(async (session) => {
       // 先确保两端实体存在（兜底，正常流程 addEntity 已建过）
       await session.run(
@@ -105,6 +113,7 @@ export class Neo4jGraphStore implements GraphStore {
   }
 
   async getEntity(name: string): Promise<GraphEntity | undefined> {
+    await this.ensureInit();
     return this.withSession(async (session) => {
       const result = await session.run(
         "MATCH (e:MemoryEntity {name: $name}) RETURN e.name AS name, e.type AS type, e.memoryIds AS memoryIds",
@@ -121,6 +130,7 @@ export class Neo4jGraphStore implements GraphStore {
   }
 
   async listEntities(limit?: number): Promise<GraphEntity[]> {
+    await this.ensureInit();
     return this.withSession(async (session) => {
       const result = await session.run(
         "MATCH (e:MemoryEntity) " +
@@ -141,6 +151,7 @@ export class Neo4jGraphStore implements GraphStore {
     names: string[],
     limit?: number,
   ): Promise<GraphRelation[]> {
+    await this.ensureInit();
     if (names.length === 0) return [];
     return this.withSession(async (session) => {
       const result = await session.run(
@@ -160,6 +171,7 @@ export class Neo4jGraphStore implements GraphStore {
   }
 
   async getMemoryIdsForEntities(names: string[]): Promise<string[]> {
+    await this.ensureInit();
     if (names.length === 0) return [];
 
     // 1) 命中实体自身的 memoryIds
@@ -199,5 +211,6 @@ export class Neo4jGraphStore implements GraphStore {
   async close(): Promise<void> {
     await this.driver?.close();
     this.driver = undefined;
+    this.initialized = false;
   }
 }

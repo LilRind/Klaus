@@ -14,6 +14,8 @@ import {
   type MemoryType,
 } from "../base";
 import { createRequire } from "node:module";
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 
 // 本项目 vite/vitest 管线会把 node:sqlite 的 import 说明符剥成裸 "sqlite"，
 // 无论静态还是动态导入都会解析失败；node:fs 等老牌内置模块不受影响。
@@ -107,12 +109,15 @@ export class InMemoryDocumentStore implements DocumentStore {
 /** SQLite 持久化实现（node:sqlite DatabaseSync，Node 24 内置） */
 export class SQLiteDocumentStore implements DocumentStore {
   private db?: import("node:sqlite").DatabaseSync;
+  private ready = false;
 
   constructor(private readonly databasePath: string) {}
 
   async init(): Promise<void> {
     if (this.db) return;
     const sqlite = nodeRequire("node:sqlite") as typeof import("node:sqlite");
+    // SQLite 只建文件不建目录——父目录缺失时先补（默认 ./memory_data/）
+    await mkdir(dirname(this.databasePath), { recursive: true });
     this.db = new sqlite.DatabaseSync(this.databasePath);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memories (
@@ -127,6 +132,12 @@ export class SQLiteDocumentStore implements DocumentStore {
       CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type);
       CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp);
     `);
+    this.ready = true;
+  }
+
+  /** 惰性初始化：Manager 构造是同步的，无法统一 await init()，各方法自保 */
+  private async ensureReady(): Promise<void> {
+    if (!this.ready) await this.init();
   }
 
   private connection(): import("node:sqlite").DatabaseSync {
@@ -135,6 +146,7 @@ export class SQLiteDocumentStore implements DocumentStore {
   }
 
   async upsert(item: MemoryItem): Promise<void> {
+    await this.ensureReady();
     this.connection()
       .prepare(
         `INSERT INTO memories (id, content, memory_type, importance, timestamp, user_id, metadata)
@@ -156,6 +168,7 @@ export class SQLiteDocumentStore implements DocumentStore {
   }
 
   async get(id: string): Promise<MemoryItem | undefined> {
+    await this.ensureReady();
     const row = this.connection()
       .prepare("SELECT * FROM memories WHERE id = ?")
       .get(id) as SQLiteRow | undefined;
@@ -163,6 +176,7 @@ export class SQLiteDocumentStore implements DocumentStore {
   }
 
   async list(options?: MemoryListOptions): Promise<MemoryItem[]> {
+    await this.ensureReady();
     // SQLite 路径先做粗过滤（类型/重要性/时间），模态等元数据条件在内存里精筛
     const conditions: string[] = [];
     const params: (string | number)[] = [];
@@ -211,6 +225,7 @@ export class SQLiteDocumentStore implements DocumentStore {
   }
 
   async delete(id: string): Promise<boolean> {
+    await this.ensureReady();
     const result = this.connection()
       .prepare("DELETE FROM memories WHERE id = ?")
       .run(id);
@@ -218,16 +233,19 @@ export class SQLiteDocumentStore implements DocumentStore {
   }
 
   async count(options?: MemoryListOptions): Promise<number> {
+    await this.ensureReady();
     return (await this.list(options)).length;
   }
 
   async clear(): Promise<void> {
+    await this.ensureReady();
     this.connection().exec("DELETE FROM memories");
   }
 
   async close(): Promise<void> {
     this.db?.close();
     this.db = undefined;
+    this.ready = false;
   }
 }
 

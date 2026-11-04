@@ -45,6 +45,7 @@ export class PerceptualMemory extends BaseMemory {
   private readonly store: DocumentStore;
   private readonly vectors: VectorStore;
   private readonly embedder: EmbeddingService;
+  private collectionReady = false;
 
   constructor(options: PerceptualMemoryOptions) {
     super(options.config ?? new MemoryConfig(), options.clock ?? defaultClock);
@@ -54,6 +55,10 @@ export class PerceptualMemory extends BaseMemory {
   }
 
   async add(item: MemoryItem): Promise<string> {
+    if (!this.collectionReady) {
+      await this.vectors.ensureCollection(this.embedder.dimension);
+      this.collectionReady = true;
+    }
     await this.store.upsert(item);
     const vector = await embedOne(this.embedder, item.content);
     await this.vectors.upsert([
@@ -156,6 +161,7 @@ export class PerceptualMemory extends BaseMemory {
       await this.vectors.delete([item.id]);
     }
     await this.store.clear();
+    this.collectionReady = false;
   }
 
   private itemFromHit(

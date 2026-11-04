@@ -127,6 +127,7 @@ export class SemanticMemory extends BaseMemory {
   private readonly graph: GraphStore;
   private readonly embedder: EmbeddingService;
   private readonly extractor: EntityExtractor;
+  private collectionReady = false;
 
   constructor(options: SemanticMemoryOptions) {
     super(options.config ?? new MemoryConfig(), options.clock ?? defaultClock);
@@ -137,6 +138,10 @@ export class SemanticMemory extends BaseMemory {
   }
 
   async add(item: MemoryItem): Promise<string> {
+    if (!this.collectionReady) {
+      await this.vectors.ensureCollection(this.embedder.dimension);
+      this.collectionReady = true;
+    }
     const embedding = await embedOne(this.embedder, item.content);
     const { entities, relations } = this.extractor.extract(item.content);
 
@@ -299,6 +304,7 @@ export class SemanticMemory extends BaseMemory {
       await this.vectors.delete([item.id]);
     }
     await this.graph.clear();
+    this.collectionReady = false;
   }
 
   private itemFromMetadata(

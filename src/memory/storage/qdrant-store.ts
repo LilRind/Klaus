@@ -82,15 +82,18 @@ export class QdrantVectorStore implements VectorStore {
     queryVector: number[],
     options: VectorSearchOptions,
   ): Promise<VectorHit[]> {
-    // 1.20+ 客户端：query() 统一接口，最近邻检索直接传向量数组
-    const response = await this.client.query(this.collection, {
-      query: queryVector,
-      limit: options.limit,
-      filter: toQdrantFilter(options.filter),
-      score_threshold: options.scoreThreshold,
-      with_payload: true,
-    });
-    return (response.points ?? []).map((point) => ({
+    // 1.20+ 客户端：query() 统一接口，最近邻检索直接传向量数组；
+    // 集合尚未创建（首次写入前的清场/统计）按空结果处理
+    const response = await this.guardCollectionMissing(async () =>
+      this.client.query(this.collection, {
+        query: queryVector,
+        limit: options.limit,
+        filter: toQdrantFilter(options.filter),
+        score_threshold: options.scoreThreshold,
+        with_payload: true,
+      }),
+    );
+    return (response?.points ?? []).map((point) => ({
       id: String(point.id),
       score: point.score ?? 0,
       metadata: (point.payload ?? {}) as Record<string, unknown>,
@@ -102,13 +105,16 @@ export class QdrantVectorStore implements VectorStore {
     // 分页游标：ExtendedPointId（数字或 UUID 字符串），按不透明值透传
     let offset: unknown;
     do {
-      const page = await this.client.scroll(this.collection, {
-        limit: 100,
-        offset: offset as never,
-        filter: toQdrantFilter(filter),
-        with_payload: true,
-        with_vector: false,
-      });
+      const page = await this.guardCollectionMissing(() =>
+        this.client.scroll(this.collection, {
+          limit: 100,
+          offset: offset as never,
+          filter: toQdrantFilter(filter),
+          with_payload: true,
+          with_vector: false,
+        }),
+      );
+      if (!page) break;
       for (const point of page.points) {
         records.push({
           id: String(point.id),
@@ -122,11 +128,14 @@ export class QdrantVectorStore implements VectorStore {
   }
 
   async getById(id: string): Promise<VectorRecord | undefined> {
-    const points = await this.client.retrieve(this.collection, {
-      ids: [id],
-      with_payload: true,
-      with_vector: true,
-    });
+    const points = await this.guardCollectionMissing(() =>
+      this.client.retrieve(this.collection, {
+        ids: [id],
+        with_payload: true,
+        with_vector: true,
+      }),
+    );
+    if (!points) return undefined;
     const point = points[0];
     if (!point) return undefined;
     return {
@@ -145,18 +154,39 @@ export class QdrantVectorStore implements VectorStore {
   }
 
   async count(filter?: VectorFilter): Promise<number> {
-    const result = await this.client.count(this.collection, {
-      filter: toQdrantFilter(filter),
-      exact: true,
-    });
-    return result.count;
+    const result = await this.guardCollectionMissing(() =>
+      this.client.count(this.collection, {
+        filter: toQdrantFilter(filter),
+        exact: true,
+      }),
+    );
+    return result?.count ?? 0;
   }
 
   async clear(): Promise<void> {
-    await this.client.deleteCollection(this.collection);
+    await this.guardCollectionMissing(() =>
+      this.client.deleteCollection(this.collection),
+    );
     this.dimension = undefined;
   }
 
   /** REST 客户端无长连接，close 为空操作（与 InMemory 行为对齐） */
   async close(): Promise<void> {}
+
+  /** 集合不存在（404）时按空结果处理——与 InMemory 版的"未 ensure 即空"语义对齐 */
+  private async guardCollectionMissing<T>(operation: () => Promise<T>): Promise<T | undefined> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (isCollectionMissing(error)) return undefined;
+      throw error;
+    }
+  }
+}
+
+function isCollectionMissing(error: unknown): boolean {
+  const status = (error as { status?: number }).status;
+  if (status === 404) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("doesn't exist") || message.includes("not found");
 }
