@@ -28,5 +28,8 @@ export * from "./memory/types/perceptual";
 export * from "./memory/storage/vector-store";
 export * from "./memory/storage/document-store";
 export * from "./memory/storage/graph-store";
+export * from "./memory/storage/qdrant-store";
+export * from "./memory/storage/neo4j-store";
+export * from "./memory/storage/factories";
 export * from "./memory/rag/document";
 export * from "./memory/rag/pipeline";

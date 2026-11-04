@@ -25,7 +25,9 @@
     "example:memory-rag-agent": "tsx examples/memory-rag-agent.ts"
   },
   "dependencies": {
+    "@qdrant/js-client-rest": "^1.20.0",
     "dotenv": "^16.4.5",
+    "neo4j-driver": "^6.3.0",
     "openai": "^4.77.0"
   },
   "devDependencies": {

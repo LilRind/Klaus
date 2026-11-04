@@ -21,11 +21,13 @@ import {
 } from "./base";
 import { createEmbeddingService, type EmbeddingService } from "./embedding";
 import type { DocumentStore } from "./storage/document-store";
-import { InMemoryDocumentStore } from "./storage/document-store";
 import type { GraphStore } from "./storage/graph-store";
-import { InMemoryGraphStore } from "./storage/graph-store";
 import type { VectorStore } from "./storage/vector-store";
-import { InMemoryVectorStore } from "./storage/vector-store";
+import {
+  createDefaultDocumentStore,
+  createDefaultGraphStore,
+  createDefaultVectorStore,
+} from "./storage/factories";
 import { EpisodicMemory } from "./types/episodic";
 import { PerceptualMemory } from "./types/perceptual";
 import { SemanticMemory } from "./types/semantic";
@@ -115,9 +117,10 @@ export class MemoryManager {
     const enablePerceptual = options.enablePerceptual ?? false;
 
     this.embedder = options.embedder ?? createEmbeddingService({ config: this.config });
-    this.vectorStore = options.vectorStore ?? new InMemoryVectorStore();
-    this.graphStore = options.graphStore ?? new InMemoryGraphStore();
-    this.documentStore = options.documentStore ?? new InMemoryDocumentStore();
+    // 默认装配工厂：.env 配了 Qdrant/Neo4j 就连真实库，否则进程内兜底
+    this.vectorStore = options.vectorStore ?? createDefaultVectorStore({ config: this.config });
+    this.graphStore = options.graphStore ?? createDefaultGraphStore({ config: this.config });
+    this.documentStore = options.documentStore ?? createDefaultDocumentStore({ config: this.config });
     this.ownedStores = !options.vectorStore && !options.documentStore;
 
     if (enableWorking) {

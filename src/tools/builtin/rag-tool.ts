@@ -12,7 +12,7 @@ import type { MemoryConfig } from "../../memory/base";
 import { RAGPipeline, type RAGSearchHit } from "../../memory/rag/pipeline";
 import type { ChatLLM } from "../../core/llm";
 import type { VectorStore } from "../../memory/storage/vector-store";
-import { InMemoryVectorStore } from "../../memory/storage/vector-store";
+import { createDefaultVectorStore } from "../../memory/storage/factories";
 
 export interface RAGToolOptions {
   knowledgeBasePath?: string;
@@ -67,7 +67,9 @@ export class RAGTool extends Tool {
     this.collectionName =
       options.collectionName ?? "rag_knowledge_base";
     const embedder = options.embedder ?? createEmbeddingService({ config: options.config });
-    const vectorStore = options.vectorStore ?? new InMemoryVectorStore();
+    const vectorStore =
+      options.vectorStore ??
+      createDefaultVectorStore({ collection: this.collectionName });
     this.pipeline = new RAGPipeline({
       vectorStore,
       embedder,

@@ -2,5 +2,11 @@ node_modules/
 dist/
 coverage/
 .env
+
+# 第八章运行时产物（SQLite 记忆库/临时知识库）
+memory_data/
+knowledge_base/
+*_kb/
+demo_rag_kb/
 *.log
 logs/

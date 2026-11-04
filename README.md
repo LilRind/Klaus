@@ -38,6 +38,7 @@
 | 8.3.4 RAG 管道 | `src/memory/rag/pipeline.ts` `src/memory/rag/document.ts` | Markdown 结构感知分块（标题层级/Token 预算/重叠）+ 摄取 + 检索 + LLM 问答；MarkItDown 的 TS 替代支持 md/txt/json/csv/html |
 | 8.3.5 高级检索 | 同上 `RAGPipeline.search` | MQE 多查询扩展 + HyDE 假设文档，"扩展-检索-合并"三步 + memory_id 去重 |
 | 8.4 智能问答助手 | `examples/memory-rag-agent.ts` `examples/rag-pipeline.ts` | SimpleAgent + ToolRegistry 注册 MemoryTool/RAGTool，Agent 自主调用两个工具 |
+| 8.1.4 存储后端层 | `src/memory/storage/qdrant-store.ts` `neo4j-store.ts` | Qdrant（`@qdrant/js-client-rest`）与 Neo4j（`neo4j-driver`）真实后端，与内存版同接口 |
 
 **与书的技术栈差异**（结构对齐，生态替换）：
 
@@ -102,10 +103,24 @@ npm run example:rag          # 第八章：RAG 管道（检索离线可跑，问
 npm run example:memory-rag-agent # 第八章：Agent 集成记忆+RAG（需 LLM）
 ```
 
-第八章的存储默认走进程内实现（零配置离线跑通）。要接真实 Qdrant / Neo4j，
-按 `.env.example` 第八章段落配置 `QDRANT_*` / `NEO4J_*` 并注入对应
-`VectorStore` / `GraphStore` 实现（接口与内存版完全一致）。
-注意向量维度必须与嵌入模型一致（书里同样的坑：`QDRANT_VECTOR_SIZE`）。
+第八章的存储走**默认装配工厂**（`storage/factories.ts`）：`.env` 配了
+`QDRANT_URL` / `NEO4J_URI` 就自动连真实数据库，什么都没配就退化成进程内实现
+（零配置离线跑通，重启即失）。本地 Docker 起法：
+
+```bash
+# Qdrant（向量库，数据挂载到本机目录持久化）
+docker run -d --name hello-agents-qdrant -p 6333:6333 -v hello-agents-qdrant-data:/qdrant/storage qdrant/qdrant
+
+# Neo4j（图数据库，同样挂 volume）
+docker run -d --name hello-agents-neo4j -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/hello-agents-password \
+  -v hello-agents-neo4j-data:/data neo4j
+```
+
+然后在 `.env` 打开 `QDRANT_URL=http://localhost:6333` 与
+`NEO4J_URI=bolt://localhost:7687` / `NEO4J_PASSWORD=hello-agents-password`。
+注意向量维度必须与嵌入模型一致（书里同样的坑：`QDRANT_VECTOR_SIZE`，
+TFIDF=512 / MiniLM=384 / dashscope v3=1024）。
 
 ### 最小示例
 
