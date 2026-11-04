@@ -20,6 +20,7 @@ export class QAAssistant {
   private entityExtractor?: LLMEntityExtractor;
   private userId = "default_user";
   private askedCount = 0;
+  private qaRecordEnabled = true;
 
   get initialized(): boolean {
     return this.memoryTool !== undefined && this.ragTool !== undefined;
@@ -55,16 +56,31 @@ export class QAAssistant {
         if (!arg) return "❌ 用法: /ask <问题>";
         this.askedCount += 1;
         const advanced = command === "/askx";
-        return this.output(
-          await this.ragTool!.execute(
+        const answer = await this.ragTool!.execute(
             JSON.stringify({
               action: "ask",
               query: arg,
               enable_mqe: advanced,
               enable_hyde: advanced,
             }),
-          ),
         );
+        // 学习历程记录（书 8.4）：问答对存为情景记忆，让 /recall 能找回"我问过什么"
+        let recordNote = "";
+        if (this.qaRecordEnabled && !answer.startsWith("❌")) {
+          const answerBody = (answer.split("\n📚")[0] ?? answer).trim();
+          await this.memoryTool!.execute(
+            JSON.stringify({
+              action: "add",
+              content:
+                `用户提问：${arg}\n助手回答：${answerBody.slice(0, 300)}${answerBody.length > 300 ? "…" : ""}`,
+              memory_type: "episodic",
+              importance: 0.75,
+              event_type: "qa_exchange",
+            }),
+          );
+          recordNote = "\n📝 学习历程已记录（/recall 可找回，/record off 关闭）";
+        }
+        return this.output(answer + recordNote);
       }
       case "/note":
         if (!arg) return "❌ 用法: /note <内容>";
@@ -97,11 +113,20 @@ export class QAAssistant {
         this.entityExtractor.setEnabled(on);
         return `✅ LLM 实体抽取已${on ? "开启（语义记忆写入走 LLM 抽取）" : "关闭（回落规则抽取器，不再调用 LLM）"}`;
       }
+      case "/record": {
+        const on = ["on", "true", "1", "开"].includes(arg.toLowerCase());
+        const off = ["off", "false", "0", "关"].includes(arg.toLowerCase());
+        if (!on && !off) {
+          return `当前问答历程记录: ${this.qaRecordEnabled ? "开" : "关"}（/record on|off 切换）`;
+        }
+        this.qaRecordEnabled = on;
+        return `✅ 问答历程记录已${on ? "开启（每次 /ask 存一条情景记忆）" : "关闭（不再记录问答对）"}`;
+      }
       case "/exit":
       case "/quit":
         return "👋 bye（Web 模式下关闭页面即可，/exit 仅 REPL 有效）";
       default:
-        return `❓ 未知命令: ${command}。可用: /init /load /ask /askx /note /recall /stats /report /extract`;
+        return `❓ 未知命令: ${command}。可用: /init /load /ask /askx /note /recall /stats /report /extract /record`;
     }
   }
 

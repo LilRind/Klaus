@@ -248,8 +248,15 @@ export class MemoryTool extends Tool {
     });
     if (results.length === 0) return "🔍 未找到相关记忆";
 
+    // 诚实提醒：云端嵌入对同语言文本有非零基线相似度，
+    // 全部低分时明确提示"可能不相关"，避免用户误以为命中了相关记忆
+    const topScore = results[0]?.score ?? 0;
+    const lowRelevanceHint =
+      topScore < 0.3 ? `⚠️ 最高相关度仅 ${topScore.toFixed(3)}，以下结果可能不相关：\n` : "";
+
     return (
-      `🔍 找到 ${results.length} 条相关记忆：\n` +
+      lowRelevanceHint +
+        `🔍 找到 ${results.length} 条相关记忆：\n` +
       results.map((result, index) => renderResult(index + 1, result)).join("\n")
     );
   }

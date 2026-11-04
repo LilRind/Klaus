@@ -149,11 +149,24 @@ describe("MemoryTool（书 8.2.3，JSON 协议统一入口）", () => {
       JSON.stringify({ action: "search", query: "TypeScript" }),
     );
     expect(searchResult).toContain("张三在学 TypeScript");
+    expect(searchResult).not.toContain("可能不相关");
 
     expect(await tool.execute(JSON.stringify({ action: "stats" }))).toContain("记忆统计");
     const summary = await tool.execute(JSON.stringify({ action: "summary" }));
     expect(summary).toContain("记忆摘要");
     expect(summary).toContain("working");
+  });
+
+  it("search 低相关结果会诚实提醒", async () => {
+    const tool = buildTool(["working"]);
+    await tool.execute(
+      JSON.stringify({ action: "add", content: "苹果香蕉橙子菠萝", memory_type: "working" }),
+    );
+    const result = await tool.execute(
+      JSON.stringify({ action: "search", query: "量子纠缠波函数坍缩" }),
+    );
+    // TFIDF 对零词面重叠的查询得分极低 → 应出现提醒而非伪装成"找到相关记忆"
+    expect(result).toContain("可能不相关");
   });
 
   it("perceptual 添加自动推断模态；update/remove 闭环", async () => {
