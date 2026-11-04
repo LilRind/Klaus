@@ -10,7 +10,7 @@
  */
 
 import "dotenv/config";
-import { MemoryManager, TFIDFEmbedding } from "../../src/index";
+import { MemoryManager, createEmbeddingService } from "../../src/index";
 import {
   createDefaultDocumentStore,
   createDefaultGraphStore,
@@ -36,7 +36,7 @@ async function main() {
   const manager = new MemoryManager({
     userId: "crud_verify_user",
     enablePerceptual: true,
-    embedder: new TFIDFEmbedding(),
+    embedder: createEmbeddingService(),
     vectorStore,
     graphStore,
     documentStore,

@@ -13,7 +13,7 @@ import "dotenv/config";
 import {
   MemoryManager,
   RAGPipeline,
-  TFIDFEmbedding,
+  createEmbeddingService,
 } from "../../src/index";
 import {
   createDefaultDocumentStore,
@@ -22,7 +22,7 @@ import {
 } from "../../src/memory/storage/factories";
 
 async function main() {
-  const embedder = new TFIDFEmbedding();
+  const embedder = createEmbeddingService();
   const vectorStore = createDefaultVectorStore();
   const graphStore = createDefaultGraphStore();
   const documentStore = createDefaultDocumentStore();

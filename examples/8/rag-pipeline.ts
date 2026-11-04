@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RAGPipeline } from "../../src/memory/rag/pipeline";
 import { InMemoryVectorStore } from "../../src/memory/storage/vector-store";
-import { TFIDFEmbedding } from "../../src/memory/embedding";
+import { createEmbeddingService } from "../../src/memory/embedding";
 import { chunkText } from "../../src/memory/rag/document";
 
 const KNOWLEDGE = [
@@ -45,7 +45,8 @@ async function main() {
 
   const pipeline = new RAGPipeline({
     vectorStore: new InMemoryVectorStore(),
-    embedder: new TFIDFEmbedding(),
+    // 走工厂：未配 EMBED_* 降级 TFIDF 并提醒；配了云端则自动升级（示例与 .env 联动）
+    embedder: createEmbeddingService(),
     ragNamespace: "demo",
   });
   const ingested = await pipeline.ingest({ filePath });

@@ -14,7 +14,7 @@ import {
   InMemoryGraphStore,
   InMemoryVectorStore,
   MemoryManager,
-  TFIDFEmbedding,
+  createEmbeddingService,
   createMemoryItem,
 } from "../../src/index";
 import { WorkingMemory } from "../../src/memory/types/working";
@@ -22,7 +22,7 @@ import { RuleBasedEntityExtractor } from "../../src/memory/types/semantic";
 import { inferModality } from "../../src/memory/types/perceptual";
 
 async function main() {
-  const embedder = new TFIDFEmbedding();
+  const embedder = createEmbeddingService();
   const vectorStore = new InMemoryVectorStore();
   const graphStore = new InMemoryGraphStore();
   const documentStore = new InMemoryDocumentStore();
