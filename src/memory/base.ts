@@ -86,8 +86,12 @@ export interface MemoryConfigOptions {
   neo4jUri?: string;
   neo4jUsername?: string;
   neo4jPassword?: string;
-  /** 嵌入服务类型：tfidf（离线兜底）| openai-compat（DashScope/OpenAI 兼容端点） */
-  embedModelType?: "tfidf" | "openai-compat";
+  /**
+   * 嵌入服务类型：tfidf | dashscope | openai | ollama 等字符串。
+   * 不设默认值——undefined 时工厂回落到 EMBED_MODEL_TYPE 环境变量，
+   * 否则会盖掉用户在 .env 里的云端配置（配置优先级：显式 config > 环境变量）。
+   */
+  embedModelType?: string;
   embedModelName?: string;
   embedApiKey?: string;
   embedBaseUrl?: string;
@@ -103,7 +107,7 @@ export class MemoryConfig {
   readonly neo4jUri?: string;
   readonly neo4jUsername?: string;
   readonly neo4jPassword?: string;
-  readonly embedModelType: "tfidf" | "openai-compat";
+  readonly embedModelType: string | undefined;
   readonly embedModelName?: string;
   readonly embedApiKey?: string;
   readonly embedBaseUrl?: string;
@@ -126,7 +130,7 @@ export class MemoryConfig {
     this.neo4jUri = options.neo4jUri;
     this.neo4jUsername = options.neo4jUsername;
     this.neo4jPassword = options.neo4jPassword;
-    this.embedModelType = options.embedModelType ?? "tfidf";
+    this.embedModelType = options.embedModelType;
     this.embedModelName = options.embedModelName;
     this.embedApiKey = options.embedApiKey;
     this.embedBaseUrl = options.embedBaseUrl;

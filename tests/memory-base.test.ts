@@ -27,7 +27,8 @@ describe("MemoryItem / MemoryConfig（书 8.1.4 base.py）", () => {
     expect(defaults.workingMemoryCapacity).toBe(50);
     expect(defaults.workingMemoryTtlMinutes).toBe(60);
     expect(defaults.databasePath).toBe("./memory_data/memory.db");
-    expect(defaults.embedModelType).toBe("tfidf");
+    // 不设默认：undefined 时嵌入工厂回落 EMBED_MODEL_TYPE 环境变量
+    expect(defaults.embedModelType).toBeUndefined();
 
     const custom = new MemoryConfig({ workingMemoryCapacity: 10, workingMemoryTtlMinutes: 5 });
     expect(custom.workingMemoryCapacity).toBe(10);

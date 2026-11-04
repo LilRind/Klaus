@@ -22,6 +22,33 @@ export interface EmbeddingService {
 export type EmbeddingEnvSource = Record<string, string | undefined>;
 
 // ---------------------------------------------------------------------------
+// 降级提醒（约定：任何使用本地 TFIDF 兜底的地方都必须明确告知用户）
+// ---------------------------------------------------------------------------
+
+const warnedReasons = new Set<string>();
+
+/**
+ * 嵌入降级警告（同一原因只提醒一次，console.warn 走 stderr 不污染结果输出）。
+ * TFIDF 是词法嵌入（词项权重统计），不是云端语义嵌入——检索质量有本质差距，
+ * 用户有权第一时间知道"当前不是云端 RAG Embedding"。
+ */
+export function warnEmbeddingDegraded(reason: string, detail?: string): void {
+  if (warnedReasons.has(reason)) return;
+  warnedReasons.add(reason);
+  const message =
+    `⚠️ [Embedding 降级] ${reason}` +
+    (detail ? `（${detail}）` : "") +
+    " —— 当前使用本地 TFIDF 词法嵌入，不是云端语义嵌入，记忆/RAG 检索质量会下降。" +
+    "在 .env 配置 EMBED_MODEL_TYPE / EMBED_API_KEY / EMBED_BASE_URL 可启用云端嵌入。";
+  console.warn(message);
+}
+
+/** 测试用：清空警告去重状态 */
+export function resetEmbeddingWarnings(): void {
+  warnedReasons.clear();
+}
+
+// ---------------------------------------------------------------------------
 // TFIDF 嵌入（离线兜底）
 // ---------------------------------------------------------------------------
 
@@ -214,6 +241,53 @@ export class OpenAICompatEmbedding implements EmbeddingService {
 }
 
 // ---------------------------------------------------------------------------
+// 运行时降级链（对应书 create_embedding_model_with_fallback）
+// ---------------------------------------------------------------------------
+
+/**
+ * 云端嵌入 → TFIDF 的运行时兜底：
+ * - 首次失败时提醒"已降级"，之后静默兜底（不刷屏）；
+ * - 云端恢复时提醒"已恢复"；
+ * - TFIDF 维度对齐主服务（散列技巧支持任意维度），降级向量仍能进同一集合。
+ * 注意：云端向量与 TFIDF 向量空间不同，降级前入库的文档可能召回不准——
+ * 这是降级保可用的固有代价，提醒文案里已明确告知。
+ */
+export class FallbackEmbedding implements EmbeddingService {
+  readonly dimension: number;
+
+  private readonly fallback: TFIDFEmbedding;
+  private degraded = false;
+
+  constructor(
+    private readonly primary: EmbeddingService,
+    dimension?: number,
+  ) {
+    this.dimension = dimension ?? primary.dimension;
+    this.fallback = new TFIDFEmbedding(this.dimension);
+  }
+
+  async embed(texts: string[]): Promise<number[][]> {
+    try {
+      const vectors = await this.primary.embed(texts);
+      if (this.degraded) {
+        this.degraded = false;
+        console.warn("✅ [Embedding 恢复] 云端语义嵌入已恢复可用");
+      }
+      return vectors;
+    } catch (error) {
+      if (!this.degraded) {
+        this.degraded = true;
+        warnEmbeddingDegraded(
+          "云端嵌入调用失败，已自动切换 TFIDF",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      return this.fallback.embed(texts);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 工厂：从配置/环境变量创建嵌入服务（对应书 create_embedding_model_with_fallback）
 // ---------------------------------------------------------------------------
 
@@ -235,7 +309,13 @@ export function createEmbeddingService(
 
   const modelType =
     config?.embedModelType ?? env.EMBED_MODEL_TYPE?.trim().toLowerCase();
-  if (!modelType || modelType === "tfidf") {
+  if (!modelType) {
+    // 未做任何配置 = 隐式降级，必须提醒用户"当前不是云端嵌入"
+    warnEmbeddingDegraded("未配置 EMBED_* 嵌入配置");
+    return new TFIDFEmbedding();
+  }
+  if (modelType === "tfidf") {
+    // 显式指定 tfidf = 主动选择词法嵌入，不打扰
     return new TFIDFEmbedding();
   }
 
@@ -249,21 +329,17 @@ export function createEmbeddingService(
     config?.embedBaseUrl ?? env.EMBED_BASE_URL?.trim() ?? defaultEmbedBaseUrl(modelType, env);
   const dimension = parseDimension(env.QDRANT_VECTOR_SIZE);
 
-  if (!apiKey) {
-    throw new Error(
-      `EMBED_MODEL_TYPE=${modelType} 需要 EMBED_API_KEY（或 LLM_API_KEY）`,
+  if (!apiKey || !baseUrl) {
+    // 配置不完整：降级可用 + 提醒，好过直接崩掉整个 Agent
+    warnEmbeddingDegraded(
+      `EMBED_MODEL_TYPE=${modelType} 但 ${!apiKey ? "缺少 EMBED_API_KEY（或 LLM_API_KEY）" : "缺少 EMBED_BASE_URL"}`,
     );
-  }
-  if (!baseUrl) {
-    throw new Error(`EMBED_MODEL_TYPE=${modelType} 需要 EMBED_BASE_URL`);
+    return new TFIDFEmbedding();
   }
 
-  return new OpenAICompatEmbedding({
-    model,
-    apiKey,
-    baseUrl,
-    dimension,
-  });
+  return new FallbackEmbedding(
+    new OpenAICompatEmbedding({ model, apiKey, baseUrl, dimension }),
+  );
 }
 
 function defaultEmbedModel(modelType: string, env: EmbeddingEnvSource): string {
