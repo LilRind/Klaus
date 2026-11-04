@@ -13,6 +13,7 @@ import { RAGPipeline, type RAGSearchHit } from "../../memory/rag/pipeline";
 import type { ChatLLM } from "../../core/llm";
 import type { VectorStore } from "../../memory/storage/vector-store";
 import { createDefaultVectorStore } from "../../memory/storage/factories";
+import { MemoryManager } from "../../memory/manager";
 
 export interface RAGToolOptions {
   knowledgeBasePath?: string;
@@ -24,6 +25,13 @@ export interface RAGToolOptions {
   llm?: ChatLLM;
   chunkTokens?: number;
   overlapTokens?: number;
+  /**
+   * RAG→记忆联动（书 8.1.3："可将重要的检索结果自动存储到记忆系统中"）：
+   * 注入后 search/ask 支持 save_to_memory=true 把命中分块存为语义记忆。
+   */
+  memoryManager?: MemoryManager;
+  /** ask 时默认自动保存检索结果（不必每次传 save_to_memory） */
+  autoSaveToMemory?: boolean;
 }
 
 interface RAGActionPayload {
@@ -61,8 +69,13 @@ export class RAGTool extends Tool {
   readonly knowledgeBasePath: string;
   readonly collectionName: string;
 
+  private readonly memoryManager?: MemoryManager;
+  private readonly autoSaveToMemory: boolean;
+
   constructor(options: RAGToolOptions = {}) {
     super();
+    this.memoryManager = options.memoryManager;
+    this.autoSaveToMemory = options.autoSaveToMemory ?? false;
     this.knowledgeBasePath = options.knowledgeBasePath ?? "./knowledge_base";
     this.collectionName =
       options.collectionName ?? "rag_knowledge_base";
@@ -133,9 +146,11 @@ export class RAGTool extends Tool {
       scoreThreshold: numberField(payload.score_threshold),
     });
     if (hits.length === 0) return "🔍 知识库中未找到相关内容";
+    const memoryNote = await this.maybeSaveToMemory(query, hits, payload);
     return (
       `🔍 找到 ${hits.length} 条相关内容：\n` +
-      hits.map((hit, index) => renderHit(index + 1, hit)).join("\n")
+      hits.map((hit, index) => renderHit(index + 1, hit)).join("\n") +
+      memoryNote
     );
   }
 
@@ -153,10 +168,55 @@ export class RAGTool extends Tool {
           `[${index + 1}] ${hit.source}${hit.headingPath ? ` > ${hit.headingPath}` : ""} (相关度 ${hit.score.toFixed(3)})`,
       )
       .join("\n");
+    const memoryNote = await this.maybeSaveToMemory(query, result.sources, payload);
     return (
       result.answer +
-      (result.sources.length ? `\n\n📚 引用来源:\n${sources}` : "\n\n📚（知识库无相关内容，以上为模型直答）")
+      (result.sources.length ? `\n\n📚 引用来源:\n${sources}` : "\n\n📚（知识库无相关内容，以上为模型直答）") +
+      memoryNote
     );
+  }
+
+  /**
+   * 检索结果 → 语义记忆（书 8.1.3 的 RAG→记忆联动）：
+   * 按 rag_chunk_id 去重，元数据带检索出处，检索得分映射为重要性（下限 0.5）。
+   */
+  private async maybeSaveToMemory(
+    query: string,
+    hits: RAGSearchHit[],
+    payload: RAGActionPayload,
+  ): Promise<string> {
+    if (!payload.save_to_memory && !this.autoSaveToMemory) return "";
+    if (!this.memoryManager) {
+      return "\n⚠️ 未注入 memoryManager，save_to_memory 已忽略";
+    }
+    if (hits.length === 0) return "";
+
+    const existing = new Set(
+      (await this.memoryManager.listMemories({ memoryTypes: ["semantic"] }))
+        .map((item) => item.metadata.rag_chunk_id)
+        .filter((value): value is string => typeof value === "string"),
+    );
+
+    let saved = 0;
+    for (const hit of hits) {
+      if (existing.has(hit.chunkId)) continue;
+      await this.memoryManager.addMemory({
+        content: hit.content,
+        memoryType: "semantic",
+        importance: Math.min(1, Math.max(0.5, hit.score)),
+        metadata: {
+          knowledge_type: "rag_retrieval",
+          rag_source: hit.source,
+          rag_namespace: this.pipeline.ragNamespace,
+          rag_chunk_id: hit.chunkId,
+          heading_path: hit.headingPath,
+          retrieval_score: hit.score,
+          original_query: query,
+        },
+      });
+      saved += 1;
+    }
+    return saved > 0 ? `\n🧠 已将 ${saved} 条检索结果存入记忆系统` : "";
   }
 
   private async stats(): Promise<string> {

@@ -28,8 +28,10 @@
 | 书章节 | 本项目文件 | 说明 |
 |---|---|---|
 | 8.1.3/8.1.4 记忆与 RAG 架构 | `src/memory/base.ts` | MemoryItem / MemoryConfig / BaseMemory 四层架构的地基 |
+| 8.1.3 RAG→记忆联动 | `RAGTool save_to_memory` | 检索结果按 chunk 去重后存为语义记忆（元数据带检索出处） |
 | 8.2.2 快速体验 | `examples/8/memory-basic.ts` | MemoryTool 九个 action 全链路（add/search/summary/stats/update/remove/forget/consolidate/clear_all） |
 | 8.2.3 MemoryTool | `src/tools/builtin/memory-tool.ts` | JSON 统一入口 + 会话 ID 自动管理 + 感知模态推断 |
+| 8.2.3 auto_classify | 同上 `auto_classify: true` | LLM 四分类，未配置时降级规则分类器并提醒 |
 | 8.2.4 MemoryManager | `src/memory/manager.ts` | 四类型统一调度、三种遗忘策略、记忆固化（working→episodic→semantic） |
 | 8.2.5 工作记忆 | `src/memory/types/working.ts` | 纯内存 + TTL + 容量淘汰 + TF-IDF/关键词混合检索 |
 | 8.2.5 情景记忆 | `src/memory/types/episodic.ts` | SQLite 文档库 + 向量库混合，评分 `(向量×0.8+近因×0.2)×重要性权重` |

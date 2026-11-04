@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MemoryManager } from "../src/memory/manager";
 import { MemoryTool } from "../src/tools/builtin/memory-tool";
+import { classifyMemoryTypeByRules } from "../src/tools/builtin/memory-tool";
+import { ScriptedLLM } from "./scripted-llm";
 import {
   InMemoryDocumentStore,
   InMemoryGraphStore,
@@ -196,5 +198,67 @@ describe("MemoryTool（书 8.2.3，JSON 协议统一入口）", () => {
     expect(await tool.execute("{bad json")).toContain("❌");
     expect(await tool.execute(JSON.stringify({ action: "unknown" }))).toContain("未知操作");
     expect(await tool.execute(JSON.stringify({ action: "clear_all" }))).toContain("清空");
+  });
+
+  it("auto_classify：LLM 判定记忆类型（书 8.2.3）", async () => {
+    const llm = new ScriptedLLM(["semantic"]);
+    const tool = new MemoryTool({
+      userId: "classify_user",
+      memoryTypes: ["working", "episodic", "semantic"],
+      llm,
+      embedder: new TFIDFEmbedding(),
+      vectorStore: new InMemoryVectorStore(),
+      graphStore: new InMemoryGraphStore(),
+      documentStore: new InMemoryDocumentStore(),
+    });
+    const result = await tool.execute(
+      JSON.stringify({ action: "add", content: "Qdrant 是一种向量数据库", auto_classify: true }),
+    );
+    expect(result).toContain("类型: semantic");
+    expect(llm.invokeCount).toBe(1);
+  });
+
+  it("auto_classify：LLM 输出无法解析时回落规则分类器", async () => {
+    const llm = new ScriptedLLM(["这个我也说不清楚"]);
+    const tool = new MemoryTool({
+      userId: "classify_user",
+      memoryTypes: ["working", "episodic", "semantic"],
+      llm,
+      embedder: new TFIDFEmbedding(),
+      vectorStore: new InMemoryVectorStore(),
+      graphStore: new InMemoryGraphStore(),
+      documentStore: new InMemoryDocumentStore(),
+    });
+    // "完成了"是事件线索 → 规则分类器判 episodic
+    const result = await tool.execute(
+      JSON.stringify({ action: "add", content: "张三完成了记忆模块的复刻", auto_classify: true }),
+    );
+    expect(result).toContain("类型: episodic");
+  });
+
+  it("auto_classify：未配置 LLM 降级规则分类器并提醒一次", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const tool = new MemoryTool({
+      userId: "classify_user",
+      memoryTypes: ["working", "episodic", "semantic", "perceptual"],
+      embedder: new TFIDFEmbedding(),
+      vectorStore: new InMemoryVectorStore(),
+      graphStore: new InMemoryGraphStore(),
+      documentStore: new InMemoryDocumentStore(),
+    });
+    const result = await tool.execute(
+      JSON.stringify({ action: "add", content: "用户上传了一张代码截图", auto_classify: true }),
+    );
+    expect(result).toContain("类型: perceptual");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("规则分类器");
+    warn.mockRestore();
+  });
+
+  it("规则分类器四分支", () => {
+    expect(classifyMemoryTypeByRules("一张 photo.png 截图")).toBe("perceptual");
+    expect(classifyMemoryTypeByRules("2026 年 3 月张三完成了项目")).toBe("episodic");
+    expect(classifyMemoryTypeByRules("递归是指函数调用自身的机制")).toBe("semantic");
+    expect(classifyMemoryTypeByRules("当前正在编辑第三段")).toBe("working");
   });
 });

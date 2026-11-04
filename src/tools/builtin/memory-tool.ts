@@ -15,10 +15,13 @@ import {
   type MemoryType,
 } from "../../memory/base";
 import { inferModality } from "../../memory/types/perceptual";
+import type { ChatLLM } from "../../core/llm";
 
 export interface MemoryToolOptions extends MemoryManagerOptions {
   /** 启用的记忆类型（默认 working/episodic/semantic，对应书 8.2.4） */
   memoryTypes?: MemoryType[];
+  /** auto_classify 用的 LLM；不配置时降级为规则分类器并提醒 */
+  llm?: ChatLLM;
 }
 
 interface MemoryActionPayload {
@@ -27,6 +30,7 @@ interface MemoryActionPayload {
   memory_type?: string;
   importance?: number;
   metadata?: Record<string, unknown>;
+  auto_classify?: boolean;
   file_path?: string;
   modality?: string;
   [key: string]: unknown;
@@ -74,10 +78,14 @@ export class MemoryTool extends Tool {
   readonly memoryManager: MemoryManager;
   readonly memoryTypes: MemoryType[];
 
+  private readonly llm?: ChatLLM;
+  private classifyWarned = false;
+
   private currentSessionId?: string;
 
   constructor(options: MemoryToolOptions = {}) {
     super();
+    this.llm = options.llm;
     const requested = options.memoryTypes ?? [
       "working",
       "episodic",
@@ -139,9 +147,15 @@ export class MemoryTool extends Tool {
     if (!content || content.trim().length === 0) {
       return "❌ add 需要 content 参数";
     }
-    if (payload.memory_type && !isMemoryType(payload.memory_type)) {
-      return `❌ 未知记忆类型: ${payload.memory_type}`;
+    // 记忆类型自动分类（书 8.2.3 auto_classify）：LLM 判断 > 规则分类器兜底
+    let memoryTypeValue = payload.memory_type;
+    if (payload.auto_classify) {
+      memoryTypeValue = await this.classifyMemoryType(content);
     }
+    if (memoryTypeValue && !isMemoryType(String(memoryTypeValue))) {
+      return `❌ 未知记忆类型: ${String(memoryTypeValue)}`;
+    }
+    const memoryType = (memoryTypeValue as MemoryType | undefined) ?? "working";
 
     if (!this.currentSessionId) {
       this.currentSessionId = `session_${formatStamp(new Date())}`;
@@ -149,7 +163,7 @@ export class MemoryTool extends Tool {
 
     const metadata: Record<string, unknown> = { ...(payload.metadata ?? {}) };
     // 感知记忆：自动推断模态并记录原始文件路径（对应书 _add_memory）
-    if (payload.memory_type === "perceptual" && payload.file_path) {
+    if (memoryType === "perceptual" && payload.file_path) {
       metadata.modality ??= payload.modality ?? inferModality(payload.file_path);
       metadata.raw_data ??= payload.file_path;
     }
@@ -158,7 +172,7 @@ export class MemoryTool extends Tool {
 
     for (const [key, value] of Object.entries(payload)) {
       if (
-        !["action", "content", "memory_type", "importance", "metadata", "file_path", "modality"].includes(key)
+        !["action", "content", "memory_type", "importance", "metadata", "file_path", "modality", "auto_classify"].includes(key)
       ) {
         metadata[key] = value;
       }
@@ -166,11 +180,48 @@ export class MemoryTool extends Tool {
 
     const memoryId = await this.memoryManager.addMemory({
       content,
-      memoryType: payload.memory_type ?? "working",
+      memoryType,
       importance: payload.importance,
       metadata,
     });
-    return `✅ 记忆已添加 (ID: ${memoryId.slice(0, 8)}..., 类型: ${payload.memory_type ?? "working"})`;
+    return `✅ 记忆已添加 (ID: ${memoryId.slice(0, 8)}..., 类型: ${memoryType})`;
+  }
+
+  /**
+   * 自动分类（书 8.2.3 auto_classify 参数）：
+   * LLM 优先（注入 llm 时），失败或未配置降级为规则分类器并提醒一次。
+   */
+  private async classifyMemoryType(content: string): Promise<MemoryType> {
+    if (this.llm) {
+      try {
+        const response = await this.llm.invoke([
+          {
+            role: "system",
+            content:
+              "把用户内容分类到四种记忆类型之一，只输出类别词，不要解释。" +
+              "working=当前任务的临时上下文；episodic=具体事件与经历（含时间/完成/经过）；" +
+              "semantic=抽象知识、概念、事实与定义；perceptual=图像/音频/视频等多模态感知数据。",
+          },
+          { role: "user", content },
+        ]);
+        const match = response.match(/working|episodic|semantic|perceptual/);
+        if (match) return match[0] as MemoryType;
+        console.warn(
+          `⚠️ [auto_classify] LLM 返回无法解析（${response.slice(0, 40)}…），使用规则分类器`,
+        );
+      } catch (error) {
+        console.warn(
+          `⚠️ [auto_classify] LLM 调用失败（${error instanceof Error ? error.message : String(error)}），使用规则分类器`,
+        );
+      }
+    } else if (!this.classifyWarned) {
+      this.classifyWarned = true;
+      console.warn(
+        "⚠️ [auto_classify 降级] 未配置 LLM，使用规则分类器兜底（准确率有限）。" +
+          "给 MemoryTool 传入 llm 可启用 LLM 自动分类。",
+      );
+    }
+    return classifyMemoryTypeByRules(content);
   }
 
   private async searchMemory(payload: MemoryActionPayload): Promise<string> {
@@ -267,6 +318,28 @@ export class MemoryTool extends Tool {
 function renderResult(index: number, result: MemorySearchResult): string {
   const { item, memoryType, score } = result;
   return `${index}. [${memoryType}] (得分 ${score.toFixed(3)}, 重要性 ${item.importance.toFixed(1)}) ${item.content}`;
+}
+
+/** 规则分类器（auto_classify 的兜底）：模态线索 > 事件线索 > 知识线索 > 默认 working */
+export function classifyMemoryTypeByRules(content: string): MemoryType {
+  if (
+    /\.(png|jpe?g|gif|webp|bmp|mp3|wav|m4a|flac|ogg|mp4|mov|avi|mkv)\b|截图|图片|照片|音频|录音|视频/i.test(
+      content,
+    )
+  ) {
+    return "perceptual";
+  }
+  if (
+    /昨天|今天|刚刚|刚才|完成了|经历了|里程碑|庆祝|纪念|\d{4}\s*年|\d{1,2}\s*月\s*\d{1,2}/.test(
+      content,
+    )
+  ) {
+    return "episodic";
+  }
+  if (/是一种|是指|定义为|所谓的|概念|原理|定理|规律|属于|指的是/.test(content)) {
+    return "semantic";
+  }
+  return "working";
 }
 
 function stringField(value: unknown): string | undefined {

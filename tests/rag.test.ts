@@ -11,6 +11,9 @@ import {
 import { RAGPipeline } from "../src/memory/rag/pipeline";
 import { RAGTool } from "../src/tools/builtin/rag-tool";
 import { InMemoryVectorStore } from "../src/memory/storage/vector-store";
+import { InMemoryDocumentStore } from "../src/memory/storage/document-store";
+import { InMemoryGraphStore } from "../src/memory/storage/graph-store";
+import { MemoryManager } from "../src/memory/manager";
 import { TFIDFEmbedding } from "../src/memory/embedding";
 import { ScriptedLLM } from "./scripted-llm";
 
@@ -177,5 +180,50 @@ describe("RAGTool（统一入口）", () => {
     expect(await tool.execute("{oops")).toContain("❌");
     expect(await tool.execute(JSON.stringify({ action: "unknown" }))).toContain("未知操作");
     expect(await tool.execute(JSON.stringify({ action: "clear" }))).toContain("🗑️");
+  });
+
+  it("RAG→记忆联动（书 8.1.3）：save_to_memory 存语义记忆且按 chunk 去重", async () => {
+    const memoryManager = new MemoryManager({
+      userId: "rag_link_user",
+      embedder: new TFIDFEmbedding(),
+      vectorStore: new InMemoryVectorStore(),
+      graphStore: new InMemoryGraphStore(),
+      documentStore: new InMemoryDocumentStore(),
+    });
+    const tool = new RAGTool({
+      ragNamespace: "link_test",
+      embedder: new TFIDFEmbedding(),
+      vectorStore: new InMemoryVectorStore(),
+      memoryManager,
+    });
+    await tool.execute(
+      JSON.stringify({
+        action: "add_document",
+        text: "工作记忆容量默认 50 条，TTL 60 分钟。",
+        title: "联动测试",
+      }),
+    );
+
+    // 第一次检索并保存 → 存入语义记忆
+    const first = await tool.execute(
+      JSON.stringify({ action: "search", query: "工作记忆 容量", save_to_memory: true }),
+    );
+    expect(first).toContain("已将 1 条检索结果存入记忆");
+    const saved = await memoryManager.listMemories({ memoryTypes: ["semantic"] });
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.metadata.knowledge_type).toBe("rag_retrieval");
+    expect(saved[0]?.metadata.rag_source).toBe("联动测试");
+    expect(saved[0]?.importance).toBeGreaterThanOrEqual(0.5);
+
+    // 第二次保存同一命中 → chunk_id 去重，不重复写入
+    const second = await tool.execute(
+      JSON.stringify({ action: "search", query: "工作记忆 容量", save_to_memory: true }),
+    );
+    expect(second).not.toContain("存入记忆");
+    expect(await memoryManager.listMemories({ memoryTypes: ["semantic"] })).toHaveLength(1);
+
+    // 不带 save_to_memory → 不写记忆
+    await tool.execute(JSON.stringify({ action: "search", query: "TTL" }));
+    expect(await memoryManager.listMemories({ memoryTypes: ["semantic"] })).toHaveLength(1);
   });
 });
