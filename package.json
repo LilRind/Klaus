@@ -26,7 +26,14 @@
     "example:memory-live": "tsx examples/8/memory-live.ts",
     "verify:memory-crud": "tsx examples/8/memory-crud.ts",
     "example:qa-repl": "tsx examples/8/qa-repl.ts",
-    "example:qa-web": "tsx examples/8/qa-server.ts"
+    "example:qa-web": "tsx examples/8/qa-server.ts",
+    "example:9-01": "tsx examples/9/01-context-builder-basic.ts",
+    "example:9-02": "tsx examples/9/02-context-builder-with-agent.ts",
+    "example:9-03": "tsx examples/9/03-note-tool-operations.ts",
+    "example:9-04": "tsx examples/9/04-note-tool-integration.ts",
+    "example:9-05": "tsx examples/9/05-terminal-tool-examples.ts",
+    "example:9-06": "tsx examples/9/06-three-day-workflow.ts",
+    "verify:9-real": "tsx examples/9/verify-real-llm.ts"
   },
   "dependencies": {
     "@qdrant/js-client-rest": "^1.20.0",

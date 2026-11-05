@@ -1,9 +1,10 @@
 # HelloAgents-TS
 
-《Hello Agents》第 7 章「构建你的智能体框架」与第 8 章「记忆与检索」的 TypeScript 从零实现。
+《Hello Agents》第 7 章「构建你的智能体框架」、第 8 章「记忆与检索」与第 9 章「上下文工程」的 TypeScript 从零实现。
 练习原书：[datawhalechina/Hello-Agents](https://github.com/datawhalechina/Hello-Agents)（框架原版参考：[jjyaoao/helloagents](https://github.com/jjyaoao/helloagents)）。
 不依赖书里的 `hello-agents` Python 包，所有核心层代码按章节架构重写，
-用 vitest + 可注入的 LLM 桩实现全离线测试（133 个用例，跑测试不需要 API Key）。
+用 vitest + 可注入的 LLM 桩实现全离线测试（189 个用例，跑测试不需要 API Key）；
+LLM 依赖路径另有零 mock 真实模型验证脚本（`pnpm verify:9-real`）。
 
 ## 与书第 7 章的对应关系
 
@@ -46,6 +47,19 @@
 | （增强）聊天逐字日志 | `examples/8/chat-log.ts` | jsonl 留痕默认开（审计/复盘，/log off 关）；md 可读转录默认关（👤用户/🤖助手，/transcript on 开） |
 | （增强）Rerank 精排 | `src/memory/rag/rerank.ts` | opt-in 二级检索（默认关闭，需 RERANK_MODEL_NAME + enable_rerank） |
 | （增强）LLM 实体抽取 | `LLMEntityExtractor` | opt-in + 运行时开关；规则抽取器为默认 |
+
+## 与书第 9 章的对应关系
+
+| 书章节 | 本项目文件 | 说明 |
+|---|---|---|
+| 9.3 ContextBuilder（GSSC） | `src/context/builder.ts` `types.ts` | Gather→Select→Structure→Compress 四阶段；相关性×时近性×优先级加权、token 预算贪心、截断式压缩（对话历史最后砍） |
+| 9.3.2 核心数据结构 | `src/context/types.ts` | ContextPacket / ContextConfig（maxTokens=4000、reserveRatio=0.15、minRelevance=0.2 对齐书值）+ 记忆/RAG 源类型安全契约 |
+| 9.4 NoteTool | `src/tools/builtin/note-tool.ts` | 七 action（create/read/update/list/search/delete/summary）；Markdown+YAML frontmatter 手写解析；中文 CJK 单字展开搜索 |
+| 9.5 TerminalTool | `src/tools/builtin/terminal-tool.ts` | 17 条白名单命令全部 Node fs 内置实现（Windows 无需 bash）；路径逃逸拦截 + 10MB 截断 + 30s 超时 |
+| 9.6 代码库维护助手 | `examples/9/codebase-maintainer.ts` | 仓库版 Agentic 主线：FunctionCallAgent + 工具自选（terminal/note/memory） |
+| 9.6.4 三天工作流 | `examples/9/06-three-day-workflow.ts` | 探索→分析→规划→复盘，跨会话笔记连贯性；演示资产在 `examples/9/assets/` |
+| 01~05 渐进示例 | `examples/9/01..05-*.ts` | 基础/Agent 集成/笔记操作/笔记集成/终端全命令与安全演示 |
+| （增强）真实模型验证 | `examples/9/verify-real-llm.ts` | 零 mock 硬断言：上下文注入生效、笔记被引用、Agentic 工具循环真实落盘 |
 
 **与书的技术栈差异**（结构对齐，生态替换）：
 

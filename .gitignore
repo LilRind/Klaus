@@ -16,3 +16,10 @@ knowledge_uploads/
 第*章剩余事项.md
 *.log
 logs/
+
+# 第九章运行时产物（笔记工作区）
+notes_demo/
+project_notes_demo/
+demo_project_notes/
+verify9_notes/
+verify9_project_notes/
