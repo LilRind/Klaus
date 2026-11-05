@@ -9,7 +9,7 @@ import { QAAssistant } from "./qa-assistant";
 async function main() {
   console.log("═══ 智能文档问答助手（第8章 8.4 TS 版）═══");
   console.log("命令: /init <user_id> | /load <文件> | /ask <问题> | /askx <问题>(MQE+HyDE)");
-  console.log("      /note <内容> | /recall [词] | /stats | /report | /extract on|off | /exit");
+  console.log("      /note <内容> | /recall [词] | /stats | /report | /extract|record|log|transcript on|off | /exit");
   console.log("提示: 纯文本直接回车 = /ask 提问\n");
 
   const assistant = new QAAssistant();

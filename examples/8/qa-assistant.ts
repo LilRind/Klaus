@@ -2,8 +2,9 @@
  * 问答助手核心（书 8.4 的 TS 版）——REPL 与 Web UI 共用的命令引擎。
  *
  * 命令集（对齐书 gradio 助手功能面）：
- * /init /load /ask /askx /note /recall /stats /report /extract /exit
+ * /init /load /ask /askx /note /recall /stats /report /extract /record /log /exit
  * 联动：RAG→记忆（autoSave）、auto_classify、LLM 实体抽取（可开关）。
+ * 逐字聊天日志（jsonl append-only）默认开启，/log off 关闭。
  */
 
 import "dotenv/config";
@@ -13,6 +14,7 @@ import { OpenAICompatLLM } from "../../src/core/llm";
 import { MemoryTool } from "../../src/tools/builtin/memory-tool";
 import { RAGTool } from "../../src/tools/builtin/rag-tool";
 import { LLMEntityExtractor } from "../../src/memory/types/semantic";
+import { ChatLog, type ChatLogEntry } from "./chat-log";
 
 export class QAAssistant {
   private memoryTool?: MemoryTool;
@@ -21,6 +23,8 @@ export class QAAssistant {
   private userId = "default_user";
   private askedCount = 0;
   private qaRecordEnabled = true;
+  private readonly chatLog = new ChatLog();
+  private readonly session = `session_${formatStamp(new Date())}`;
 
   get initialized(): boolean {
     return this.memoryTool !== undefined && this.ragTool !== undefined;
@@ -30,7 +34,7 @@ export class QAAssistant {
     return this.userId;
   }
 
-  /** 执行一行 /命令；纯文本视为 /ask。返回可直接展示的输出文本。 */
+  /** 执行一行 /命令；纯文本视为 /ask。逐字记入 jsonl 审计日志后返回输出。 */
   async executeCommand(line: string): Promise<string> {
     const trimmed = line.trim();
     if (!trimmed) return "";
@@ -39,6 +43,30 @@ export class QAAssistant {
     const command = (spaceIndex === -1 ? normalized : normalized.slice(0, spaceIndex)).toLowerCase();
     const arg = spaceIndex === -1 ? "" : normalized.slice(spaceIndex + 1).trim();
 
+    const startedAt = Date.now();
+    let output: string;
+    try {
+      output = await this.dispatch(command, arg);
+    } catch (error) {
+      output = `❌ 命令执行失败: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    // 审计日志：jsonl 留痕默认开（/log off 关）；md 可读转录默认关（/transcript on 开）
+    const entry: ChatLogEntry = {
+      ts: new Date().toISOString(),
+      user: this.userId,
+      session: this.session,
+      command,
+      arg,
+      output,
+      durationMs: Date.now() - startedAt,
+      ok: !output.startsWith("❌"),
+    };
+    await this.chatLog.append(entry);
+    await this.chatLog.appendMarkdown(entry);
+    return output;
+  }
+
+  private async dispatch(command: string, arg: string): Promise<string> {
     if (command !== "/init" && !this.initialized) {
       return "⚠️ 请先执行 /init <user_id> 初始化助手";
     }
@@ -122,11 +150,29 @@ export class QAAssistant {
         this.qaRecordEnabled = on;
         return `✅ 问答历程记录已${on ? "开启（每次 /ask 存一条情景记忆）" : "关闭（不再记录问答对）"}`;
       }
+      case "/log": {
+        const on = ["on", "true", "1", "开"].includes(arg.toLowerCase());
+        const off = ["off", "false", "0", "关"].includes(arg.toLowerCase());
+        if (!on && !off) {
+          return `当前逐字聊天日志: ${this.chatLog.isEnabled ? "开" : "关"}（/log on|off 切换；文件在 memory_data/chat-logs/）`;
+        }
+        this.chatLog.setEnabled(on);
+        return `✅ 逐字聊天日志已${on ? "开启（每次命令 append 到 memory_data/chat-logs/*.jsonl）" : "关闭（本次命令之后不再记录）"}`;
+      }
+      case "/transcript": {
+        const on = ["on", "true", "1", "开"].includes(arg.toLowerCase());
+        const off = ["off", "false", "0", "关"].includes(arg.toLowerCase());
+        if (!on && !off) {
+          return `当前 md 转录: ${this.chatLog.isMarkdownEnabled ? "开" : "关"}（/transcript on|off 切换；输出 👤用户/🤖助手 可读版 .md）`;
+        }
+        this.chatLog.setMarkdownEnabled(on);
+        return `✅ md 转录已${on ? "开启（逐条写入 memory_data/chat-logs/*.md，含用户与助手发言）" : "关闭"}`;
+      }
       case "/exit":
       case "/quit":
         return "👋 bye（Web 模式下关闭页面即可，/exit 仅 REPL 有效）";
       default:
-        return `❓ 未知命令: ${command}。可用: /init /load /ask /askx /note /recall /stats /report /extract /record`;
+        return `❓ 未知命令: ${command}。可用: /init /load /ask /askx /note /recall /stats /report /extract /record /log /transcript`;
     }
   }
 
@@ -166,6 +212,22 @@ export class QAAssistant {
 
   private async report(): Promise<string> {
     const summary = await this.memoryTool!.execute(JSON.stringify({ action: "summary" }));
+    // 复盘统计：从当日逐字日志汇总（命令分布 / 提问耗时 / 时间线）
+    const chat = await this.chatLog.summarize(this.userId);
+    const chatSection =
+      chat.totalCommands === 0
+        ? ""
+        : [
+            "## 当日会话统计（来自逐字日志）",
+            "",
+            `- 命令总数: ${chat.totalCommands}（提问 ${chat.askCount} 次，平均耗时 ${(chat.avgAskMs / 1000).toFixed(1)}s）`,
+            `- 命令分布: ${Object.entries(chat.commandCounts).map(([cmd, n]) => `${cmd}×${n}`).join("、")}`,
+            "",
+            "### 最近时间线",
+            "",
+            ...chat.timeline.map((item) => `- ${item.ts} ${item.command} ${item.arg}`),
+            "",
+          ].join("\n");
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const reportPath = `./memory_data/learning-report-${this.userId}-${stamp}.md`;
     const report = [
@@ -178,13 +240,22 @@ export class QAAssistant {
       "",
       summary,
       "",
+      chatSection,
     ].join("\n");
     await mkdir(dirname(reportPath), { recursive: true });
     await writeFile(reportPath, report, "utf-8");
-    return `📄 学习报告已生成: ${reportPath}\n\n${summary}`;
+    return `📄 学习报告已生成: ${reportPath}\n\n${summary}\n\n${chatSection}`.trimEnd();
   }
 
   private output(text: string): string {
     return text.endsWith("\n") ? text : `${text}\n`;
   }
+}
+
+function formatStamp(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
+    `_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  );
 }

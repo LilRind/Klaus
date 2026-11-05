@@ -42,7 +42,8 @@
 | 8.4 智能问答助手 | `examples/8/memory-rag-agent.ts` `examples/8/rag-pipeline.ts` | SimpleAgent + ToolRegistry 注册 MemoryTool/RAGTool，Agent 自主调用两个工具 |
 | 8.1.4 存储后端层 | `src/memory/storage/qdrant-store.ts` `neo4j-store.ts` | Qdrant（`@qdrant/js-client-rest`）与 Neo4j（`neo4j-driver`）真实后端，与内存版同接口 |
 | 8.3.4 多格式文档 | `loadDocument` + pdf-parse/mammoth | PDF/DOCX/MD/TXT/JSON/CSV/HTML；OCR/音频约定外部转 Markdown |
-| 8.4 问答助手 | `examples/8/qa-repl.ts` `qa-server.ts` `qa-web.html` | 共享命令引擎 /init /load /ask /note /recall /stats /report；REPL 与 Web 双形态 |
+| 8.4 问答助手 | `examples/8/qa-repl.ts` `qa-server.ts` `qa-web.html` | 共享命令引擎 /init /load /ask /note /recall /stats /report /extract /record /log /transcript；REPL 与 Web 双形态 |
+| （增强）聊天逐字日志 | `examples/8/chat-log.ts` | jsonl 留痕默认开（审计/复盘，/log off 关）；md 可读转录默认关（👤用户/🤖助手，/transcript on 开） |
 | （增强）Rerank 精排 | `src/memory/rag/rerank.ts` | opt-in 二级检索（默认关闭，需 RERANK_MODEL_NAME + enable_rerank） |
 | （增强）LLM 实体抽取 | `LLMEntityExtractor` | opt-in + 运行时开关；规则抽取器为默认 |
 
