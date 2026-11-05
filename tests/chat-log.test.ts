@@ -94,4 +94,19 @@ describe("ChatLog 聊天逐字日志（jsonl append-only）", () => {
     expect(md).toContain("回答全文");
     expect(md).toContain("（/stats）");
   });
+
+  it("md 转录与 jsonl 总开关解耦：/log off 不影响 md 继续写入", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "chatlog-decouple-"));
+    tempDirs.push(dir);
+    const log = new ChatLog(dir);
+    log.setEnabled(false); // jsonl 关
+    log.setMarkdownEnabled(true); // md 开
+
+    await log.append(entry({ arg: "解耦测试" })); // jsonl 应被跳过
+    await log.appendMarkdown(entry({ arg: "解耦测试", output: "md 回答" }));
+
+    expect(await log.readDay("log_test")).toHaveLength(0);
+    const md = await readFile(join(dir, "log_test-" + new Date().toISOString().slice(0, 10) + ".md"), "utf-8");
+    expect(md).toContain("解耦测试");
+  });
 });

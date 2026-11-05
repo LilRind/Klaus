@@ -133,38 +133,31 @@ export class QAAssistant {
         return this.report();
       case "/extract": {
         if (!this.entityExtractor) return "ℹ️ 当前未启用 LLM 实体抽取（/init 时注入才可开关）";
-        const on = ["on", "true", "1", "开"].includes(arg.toLowerCase());
+        // 裸命令 = 切换（Web 按钮直接可用）；显式 on|off 指定目标态
+        let on = ["on", "true", "1", "开"].includes(arg.toLowerCase());
         const off = ["off", "false", "0", "关"].includes(arg.toLowerCase());
-        if (!on && !off) {
-          return `当前 LLM 实体抽取: ${this.entityExtractor.isEnabled ? "开" : "关"}（/extract on|off 切换）`;
-        }
+        if (!on && !off) on = !this.entityExtractor.isEnabled;
         this.entityExtractor.setEnabled(on);
         return `✅ LLM 实体抽取已${on ? "开启（语义记忆写入走 LLM 抽取）" : "关闭（回落规则抽取器，不再调用 LLM）"}`;
       }
       case "/record": {
-        const on = ["on", "true", "1", "开"].includes(arg.toLowerCase());
+        let on = ["on", "true", "1", "开"].includes(arg.toLowerCase());
         const off = ["off", "false", "0", "关"].includes(arg.toLowerCase());
-        if (!on && !off) {
-          return `当前问答历程记录: ${this.qaRecordEnabled ? "开" : "关"}（/record on|off 切换）`;
-        }
+        if (!on && !off) on = !this.qaRecordEnabled;
         this.qaRecordEnabled = on;
         return `✅ 问答历程记录已${on ? "开启（每次 /ask 存一条情景记忆）" : "关闭（不再记录问答对）"}`;
       }
       case "/log": {
-        const on = ["on", "true", "1", "开"].includes(arg.toLowerCase());
+        let on = ["on", "true", "1", "开"].includes(arg.toLowerCase());
         const off = ["off", "false", "0", "关"].includes(arg.toLowerCase());
-        if (!on && !off) {
-          return `当前逐字聊天日志: ${this.chatLog.isEnabled ? "开" : "关"}（/log on|off 切换；文件在 memory_data/chat-logs/）`;
-        }
+        if (!on && !off) on = !this.chatLog.isEnabled;
         this.chatLog.setEnabled(on);
         return `✅ 逐字聊天日志已${on ? "开启（每次命令 append 到 memory_data/chat-logs/*.jsonl）" : "关闭（本次命令之后不再记录）"}`;
       }
       case "/transcript": {
-        const on = ["on", "true", "1", "开"].includes(arg.toLowerCase());
+        let on = ["on", "true", "1", "开"].includes(arg.toLowerCase());
         const off = ["off", "false", "0", "关"].includes(arg.toLowerCase());
-        if (!on && !off) {
-          return `当前 md 转录: ${this.chatLog.isMarkdownEnabled ? "开" : "关"}（/transcript on|off 切换；输出 👤用户/🤖助手 可读版 .md）`;
-        }
+        if (!on && !off) on = !this.chatLog.isMarkdownEnabled;
         this.chatLog.setMarkdownEnabled(on);
         return `✅ md 转录已${on ? "开启（逐条写入 memory_data/chat-logs/*.md，含用户与助手发言）" : "关闭"}`;
       }

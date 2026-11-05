@@ -79,7 +79,8 @@ export class ChatLog {
    * 首次写入时补文件头（用户/日期/会话）。
    */
   async appendMarkdown(entry: ChatLogEntry): Promise<void> {
-    if (!this.enabled || !this.markdownEnabled) return;
+    // 与 jsonl 总开关解耦：/log off 只关 jsonl 留痕，md 转录独立受 /transcript 控制
+    if (!this.markdownEnabled) return;
     if (!this.dirReady) {
       await mkdir(this.dir, { recursive: true });
       this.dirReady = true;
