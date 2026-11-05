@@ -8,5 +8,11 @@ memory_data/
 knowledge_base/
 *_kb/
 demo_rag_kb/
+
+# 本地私密文档（学习记录/剩余事项/上传的面试纪要等，绝不入库）
+knowledge_uploads/
+记录.md
+第*章-记录.md
+第*章剩余事项.md
 *.log
 logs/

@@ -79,7 +79,7 @@ const SUPPORTED_EXTENSIONS = new Set([
 /**
  * 读取文件并统一为文本（MarkItDown 的轻量等价物）：
  * PDF（pdf-parse）/ DOCX（mammoth）/ 其余原生格式直读。
- * OCR/音频保持"外部转 Markdown 后摄取"约定（见 第8章剩余事项.md）。
+ * OCR/音频保持"外部转 Markdown 后摄取"约定（TS 生态无轻量等价，PDF/DOCX 已内置支持）。
  */
 export async function loadDocument(
   filePath: string,
