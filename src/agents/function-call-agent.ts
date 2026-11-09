@@ -57,9 +57,16 @@ export class FunctionCallAgent extends Agent {
 
       if (result.toolCalls.length === 0) {
         response = result.content ?? "";
+        this.trace(`\n✔ 循环结束：模型未再调用工具（共 ${iteration + 1} 次模型调用）`);
         this.addMessage(Message.assistant(response));
         return response;
       }
+
+      // 观察点（对齐 s01/s02 code.py 的轨迹输出）：
+      // 每轮打印模型发起的调用数与参数摘要，逐个执行后回显截断结果
+      this.trace(
+        `\n🔧 第 ${iteration + 1} 轮：模型发起 ${result.toolCalls.length} 个工具调用`,
+      );
 
       // 轨迹双写：conversation 驱动本轮循环，history 持久到下一轮。
       // assistant 消息原样回填（带 toolCalls），tool 结果按 toolCallId 回指
@@ -74,7 +81,9 @@ export class FunctionCallAgent extends Agent {
         }),
       );
       for (const call of result.toolCalls) {
+        this.trace(`   > ${call.function.name}(${summarizeArgs(call.function.arguments)})`);
         const output = await this.executeFunctionCall(call);
+        this.trace(`   = ${truncateForTrace(output)}`);
         conversation.push({
           role: "tool",
           content: output,
@@ -92,6 +101,7 @@ export class FunctionCallAgent extends Agent {
     // 达到最大轮数：强制收尾（文本模式，禁止再调工具）。
     // nudge 只进本轮 conversation、不入 history——持久化会让下一轮
     // 的模型看到"别再调工具"而不敢使用工具，污染后续任务
+    this.trace(`\n⏹ 达到最大轮数（${this.maxToolIterations}），强制文本收尾`);
     conversation.push({
       role: "user",
       content: "请根据以上工具执行结果，直接给出最终回答，不要再调用任何工具。",
@@ -141,6 +151,34 @@ export class FunctionCallAgent extends Agent {
       return `❌ ${error instanceof Error ? error.message : String(error)}`;
     }
   }
+
+  /** 执行轨迹输出（config.verbose 开启时打印；对齐 s01/s02 的控制台 UX） */
+  private trace(message: string): void {
+    if (this.config.verbose) console.log(message);
+  }
+}
+
+/** 轨迹用的参数摘要：单字符串字段直接展示，其余截断 JSON */
+function summarizeArgs(argsJson: string): string {
+  try {
+    const parsed: unknown = JSON.parse(argsJson);
+    if (typeof parsed === "string") return truncateForTrace(parsed, 80);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const values = Object.values(parsed as Record<string, unknown>);
+      if (values.length === 1 && typeof values[0] === "string") {
+        return truncateForTrace(values[0], 80);
+      }
+    }
+  } catch {
+    // 非 JSON 参数原样展示
+  }
+  return truncateForTrace(argsJson, 80);
+}
+
+/** 轨迹截断（对齐 s01/s02 code.py 的 output[:200]） */
+function truncateForTrace(text: string, limit = 200): string {
+  const flattened = text.replace(/\s+/g, " ").trim();
+  return flattened.length > limit ? `${flattened.slice(0, limit)}...` : flattened;
 }
 
 /**

@@ -22,6 +22,7 @@ import {
   EditFileTool,
   GlobTool,
   BashTool,
+  AgentConfig,
   ConsoleApprovalPrompt,
   createStandardPermissionChecker,
 } from "../../src/index";
@@ -44,6 +45,7 @@ const registry = new ToolRegistry()
   );
 
 const agent = new FunctionCallAgent("alignment-agent", llm, registry, {
+  config: new AgentConfig({ verbose: true }),
   systemPrompt:
     `You are a coding agent at ${workspace}. Environment: Windows; the bash tool runs cmd.exe. ` +
     "Use tools to solve tasks. Act, don't explain. " +

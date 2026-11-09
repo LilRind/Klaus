@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FunctionCallAgent,
   flattenArguments,
@@ -10,6 +10,11 @@ import { AgentError } from "../src/core/exceptions";
 import { Message } from "../src/core/message";
 import { toOpenAIMessages, type ChatLLM, type ToolInvocationResult } from "../src/core/llm";
 import { ScriptedLLM } from "./scripted-llm";
+import { AgentConfig } from "../src/core/config";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function calculatorRegistry(): ToolRegistry {
   return new ToolRegistry().register(new CalculatorTool());
@@ -205,5 +210,36 @@ describe("FunctionCallAgent 跨轮工具轨迹持久化（s01 对齐）", () => 
     expect(assistant.tool_calls?.[0]?.id).toBe("c1");
     const tool = mapped[3] as { tool_call_id?: string };
     expect(tool.tool_call_id).toBe("c1");
+  });
+
+  it("verbose 轨迹输出：轮次、工具调用参数、结果与循环结束标记", async () => {
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((line: string) => {
+      logs.push(line);
+    });
+    const llm = new ScriptedLLM([], [
+      toolCall("c1", "calculator", '{"expression":"6*7"}'),
+      { content: "42", toolCalls: [] },
+    ]);
+    const agent = new FunctionCallAgent("fc", llm, calculatorRegistry(), {
+      config: new AgentConfig({ verbose: true }),
+    });
+    await agent.run("6*7");
+
+    const trace = logs.join("\n");
+    expect(trace).toContain("第 1 轮：模型发起 1 个工具调用");
+    expect(trace).toContain("> calculator(6*7)");
+    expect(trace).toContain("= 42");
+    expect(trace).toContain("循环结束：模型未再调用工具");
+
+    // 默认关闭 verbose 时不打印
+    logs.length = 0;
+    const quiet = new ScriptedLLM([], [
+      toolCall("c1", "calculator", '{"expression":"6*7"}'),
+      { content: "42", toolCalls: [] },
+    ]);
+    const quietAgent = new FunctionCallAgent("fc", quiet, calculatorRegistry());
+    await quietAgent.run("6*7");
+    expect(logs).toHaveLength(0);
   });
 });
