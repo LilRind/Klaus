@@ -305,16 +305,38 @@ export class OpenAICompatLLM implements ChatLLM {
 /**
  * ChatMessage → OpenAI SDK 消息参数。
  * SDK 用判别联合（每个 role 一个窄类型）拒绝宽化的 role 联合，
- * 这里逐条映射后收窄；框架实际只发 system/user/assistant，
- * "tool" 角色由 SimpleAgent 以 user 文本回插，不会走到 SDK 的 tool_call_id 变体。
+ * 这里逐条映射后收窄。s01 对齐后 assistant 可携带 tool_calls、
+ * tool 消息以 tool_call_id 回指，轨迹跨轮保留时映射到 SDK 对应变体。
  */
-function toOpenAIMessages(
+export function toOpenAIMessages(
   messages: ChatMessage[],
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
-  return messages.map(({ role, content, name }) => {
-    const message =
-      name === undefined ? { role, content } : { role, content, name };
-    return message as OpenAI.Chat.ChatCompletionMessageParam;
+  return messages.map((message) => {
+    if (message.role === "assistant" && message.toolCalls) {
+      return {
+        role: "assistant",
+        content: message.content ?? "",
+        tool_calls: message.toolCalls.map((call) => ({
+          id: call.id,
+          type: "function" as const,
+          function: {
+            name: call.function.name,
+            arguments: call.function.arguments,
+          },
+        })),
+      } satisfies OpenAI.Chat.ChatCompletionAssistantMessageParam;
+    }
+    if (message.role === "tool") {
+      return {
+        role: "tool",
+        content: message.content ?? "",
+        tool_call_id: message.toolCallId ?? "",
+      } satisfies OpenAI.Chat.ChatCompletionToolMessageParam;
+    }
+    const { role, content, name } = message;
+    return (
+      name === undefined ? { role, content } : { role, content, name }
+    ) as OpenAI.Chat.ChatCompletionMessageParam;
   });
 }
 

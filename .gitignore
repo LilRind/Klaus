@@ -11,6 +11,8 @@ demo_rag_kb/
 
 # 本地私密文档（学习记录/剩余事项/上传的面试纪要等，绝不入库）
 knowledge_uploads/
+S01-S03对齐方案.md
+ar/
 记录.md
 第*章-记录.md
 第*章剩余事项.md
@@ -18,8 +20,15 @@ knowledge_uploads/
 logs/
 
 # 第九章运行时产物（笔记工作区）
+test_tmp/
 notes_demo/
 project_notes_demo/
 demo_project_notes/
 verify9_notes/
 verify9_project_notes/
+
+# 对齐演示在项目根目录运行时的产物（建议用独立工作区运行）
+SUMMARY.md
+hello.py
+test.py
+test.txt

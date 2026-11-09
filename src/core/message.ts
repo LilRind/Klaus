@@ -45,8 +45,17 @@ export class Message {
   readonly role: MessageRole;
   readonly name?: string;
   readonly timestamp: Date;
+  /** assistant 消息携带的原生函数调用（轨迹持久化用，s01 对齐） */
+  readonly toolCalls?: ToolCallRequest[];
+  /** tool 消息回指的调用 id */
+  readonly toolCallId?: string;
 
-  constructor(content: string, role: MessageRole = "user", name?: string) {
+  constructor(
+    content: string,
+    role: MessageRole = "user",
+    name?: string,
+    options: MessageMetadata = {},
+  ) {
     if (!MESSAGE_ROLES.includes(role)) {
       throw new Error(
         `非法消息角色: ${String(role)}，合法值: ${MESSAGE_ROLES.join(" | ")}`,
@@ -56,6 +65,8 @@ export class Message {
     this.role = role;
     this.name = name;
     this.timestamp = new Date();
+    this.toolCalls = options.toolCalls;
+    this.toolCallId = options.toolCallId;
   }
 
   static user(content: string): Message {
@@ -76,12 +87,20 @@ export class Message {
 
   /** 转成 LLM 传输载体 */
   toChatMessage(): ChatMessage {
-    return this.name === undefined
-      ? { role: this.role, content: this.content }
-      : { role: this.role, content: this.content, name: this.name };
+    const message: ChatMessage = { role: this.role, content: this.content };
+    if (this.name !== undefined) message.name = this.name;
+    if (this.toolCalls) message.toolCalls = this.toolCalls;
+    if (this.toolCallId) message.toolCallId = this.toolCallId;
+    return message;
   }
 
   toString(): string {
     return `[${this.role}] ${this.content}`;
   }
+}
+
+/** Message 附加元数据（原生函数调用轨迹） */
+export interface MessageMetadata {
+  toolCalls?: ToolCallRequest[];
+  toolCallId?: string;
 }

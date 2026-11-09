@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { AgentConfig } from "../src/core/config";
 
 describe("AgentConfig", () => {
-  it("默认值：maxSteps=5, maxToolIterations=3, timeoutMs=60000", () => {
+  it("默认值：maxSteps=5, maxToolIterations=10, timeoutMs=60000", () => {
     const config = AgentConfig.default();
     expect(config.maxSteps).toBe(5);
-    expect(config.maxToolIterations).toBe(3);
+    expect(config.maxToolIterations).toBe(10);
     expect(config.timeoutMs).toBe(60_000);
     expect(config.verbose).toBe(false);
     expect(config.temperature).toBeUndefined();

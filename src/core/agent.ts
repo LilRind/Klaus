@@ -30,15 +30,23 @@ export abstract class Agent {
   /** 执行一次任务，返回最终答案 */
   abstract run(input: string): Promise<string>;
 
-  /** 组装完整对话：system + 历史 + 当前输入 */
+  /** 组装完整对话：system + 历史（含工具轨迹） + 当前输入 */
   protected buildMessages(input: string): ChatMessage[] {
+    return [...this.buildConversation(), { role: "user", content: input }];
+  }
+
+  /**
+   * 组装当前对话：system + history 原样映射。
+   * FunctionCallAgent 把工具轨迹实时写入 history 后，用它拼出
+   * 跨轮携带工具结果的 conversation（s01 全轨迹语义）。
+   */
+  protected buildConversation(): ChatMessage[] {
     const messages: ChatMessage[] = [
       { role: "system", content: this.systemPrompt },
     ];
     for (const message of this.history) {
       messages.push(message.toChatMessage());
     }
-    messages.push({ role: "user", content: input });
     return messages;
   }
 

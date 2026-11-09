@@ -13,6 +13,7 @@ import type { ToolCallRequest } from "../core/message";
 import { AgentError } from "../core/exceptions";
 import { AgentConfig } from "../core/config";
 import { Message } from "../core/message";
+import { parseJsonObjectArguments } from "../tools/tool";
 import type { ToolRegistry } from "../tools/registry";
 
 export interface FunctionCallAgentOptions {
@@ -42,7 +43,11 @@ export class FunctionCallAgent extends Agent {
   }
 
   override async run(input: string): Promise<string> {
-    const conversation = this.buildMessages(input);
+    // s01 对齐：输入先入 history，循环中的工具轨迹实时回写——
+    // 下一次 run 的 conversation 自动携带上一轮的调用与结果，
+    // 模型看得到之前"跑过什么命令、看到什么输出"（会话级全轨迹语义）
+    this.addMessage(Message.user(input));
+    const conversation = this.buildConversation();
     const tools = this.buildToolSchemas();
 
     let response = "";
@@ -52,17 +57,22 @@ export class FunctionCallAgent extends Agent {
 
       if (result.toolCalls.length === 0) {
         response = result.content ?? "";
-        this.addMessage(Message.user(input));
         this.addMessage(Message.assistant(response));
         return response;
       }
 
+      // 轨迹双写：conversation 驱动本轮循环，history 持久到下一轮。
       // assistant 消息原样回填（带 toolCalls），tool 结果按 toolCallId 回指
       conversation.push({
         role: "assistant",
         content: result.content,
         toolCalls: result.toolCalls,
       });
+      this.addMessage(
+        new Message(result.content ?? "", "assistant", undefined, {
+          toolCalls: result.toolCalls,
+        }),
+      );
       for (const call of result.toolCalls) {
         const output = await this.executeFunctionCall(call);
         conversation.push({
@@ -71,16 +81,22 @@ export class FunctionCallAgent extends Agent {
           toolCallId: call.id,
           name: call.function.name,
         });
+        this.addMessage(
+          new Message(output, "tool", call.function.name, {
+            toolCallId: call.id,
+          }),
+        );
       }
     }
 
-    // 达到最大轮数：强制收尾（文本模式，禁止再调工具）
+    // 达到最大轮数：强制收尾（文本模式，禁止再调工具）。
+    // nudge 只进本轮 conversation、不入 history——持久化会让下一轮
+    // 的模型看到"别再调工具"而不敢使用工具，污染后续任务
     conversation.push({
       role: "user",
       content: "请根据以上工具执行结果，直接给出最终回答，不要再调用任何工具。",
     });
     response = await this.llm.invoke(conversation);
-    this.addMessage(Message.user(input));
     this.addMessage(Message.assistant(response));
     return response;
   }
@@ -112,6 +128,13 @@ export class FunctionCallAgent extends Agent {
 
   private async executeFunctionCall(call: ToolCallRequest): Promise<string> {
     try {
+      // 结构化工具：模型 JSON 参数直达 executeArgs，零展平损耗（s02 对齐）
+      const tool = this.toolRegistry.getTool(call.function.name);
+      if (tool?.executeArgs) {
+        const args = parseJsonObjectArguments(call.function.arguments);
+        return await this.toolRegistry.executeToolArgs(call.function.name, args);
+      }
+      // 字符串契约工具：保持展平兜底（存量工具兼容）
       const input = flattenArguments(call.function.arguments);
       return await this.toolRegistry.executeTool(call.function.name, input);
     } catch (error) {

@@ -7,7 +7,7 @@
 export interface AgentConfigOptions {
   /** ReActAgent 等循环型 Agent 的最大推理步数，默认 5 */
   maxSteps?: number;
-  /** SimpleAgent 单轮 run 内最大工具调用轮数，默认 3 */
+  /** 单轮 run 内最大工具调用轮数，默认 10（对齐 s01"给模型足够回合数"的精神） */
   maxToolIterations?: number;
   /** 请求超时（毫秒），默认 60000 */
   timeoutMs?: number;
@@ -28,7 +28,7 @@ export class AgentConfig {
     this.maxSteps = requirePositiveInt(options.maxSteps, 5, "maxSteps");
     this.maxToolIterations = requirePositiveInt(
       options.maxToolIterations,
-      3,
+      10,
       "maxToolIterations",
     );
     this.timeoutMs = requirePositiveInt(options.timeoutMs, 60_000, "timeoutMs");
