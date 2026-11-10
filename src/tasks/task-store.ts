@@ -34,6 +34,8 @@ export interface TaskRecord {
   status: TaskStatus;
   owner: string | null;
   blockedBy: string[];
+  /** s13：可选任务绑定 worktree 名；null 表示使用共享 workspace */
+  worktree: string | null;
 }
 
 export interface TaskStoreOptions {
@@ -109,6 +111,7 @@ export class TaskStore {
         status: "pending",
         owner: null,
         blockedBy: [],
+        worktree: null,
       };
       const file = path.join(root, `${task.id}.json`);
       let handle;
@@ -186,7 +189,11 @@ export class TaskStore {
     if (!TASK_STATUSES.includes(data.status)) {
       throw new Error(`Invalid task status: ${String(data.status)}`);
     }
-    return { ...data, blockedBy: Array.isArray(data.blockedBy) ? data.blockedBy : [] };
+    return {
+      ...data,
+      blockedBy: Array.isArray(data.blockedBy) ? data.blockedBy : [],
+      worktree: data.worktree ?? null,
+    };
   }
 
   /** 按 ID 排序列出全部任务（对齐 lcc sorted glob） */

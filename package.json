@@ -44,6 +44,7 @@
     "example:alignment:s10": "tsx examples/alignment/alignment-demo.ts s10",
     "example:alignment:s11": "tsx examples/alignment/alignment-demo.ts s11",
     "example:alignment:s12": "tsx examples/alignment/alignment-demo.ts s12",
+    "example:alignment:s13": "tsx examples/alignment/alignment-demo.ts s13",
     "example:alignment:s14": "tsx examples/alignment/alignment-demo.ts s14",
     "example:alignment:repl": "tsx examples/alignment/alignment-repl.ts"
   },

@@ -47,6 +47,10 @@ import {
   consolidateMemories,
   TaskStore,
   createTaskTools,
+  TaskWorktreeManager,
+  TaskBoard,
+  TeamManager,
+  createTeamTools,
   BackgroundManager,
   CronScheduler,
   ScheduledTurnRunner,
@@ -106,6 +110,19 @@ const taskStore = new TaskStore({
   workspaceRoot: workspace,
 });
 
+// s13：任务板强化 + worktree + teammate 协作（.mailboxes/ 保存团队事件）
+const worktreeManager = new TaskWorktreeManager({
+  workspaceRoot: workspace,
+  taskStore,
+});
+const taskBoard = new TaskBoard({ store: taskStore, worktrees: worktreeManager });
+const teamManager = new TeamManager({
+  llm,
+  board: taskBoard,
+  workspaceRoot: workspace,
+  permissionChecker,
+});
+
 // s11：后台任务管理器（run_in_background=true 的 bash 命令后台执行）
 const background = new BackgroundManager({ cwd: workspace });
 
@@ -143,6 +160,10 @@ for (const tool of createTaskTools(taskStore)) {
   registry.register(tool);
   builtinToolNames.push(tool.name);
 }
+for (const tool of createTeamTools(teamManager)) {
+  registry.register(tool);
+  builtinToolNames.push(tool.name);
+}
 registry
   .register(new ScheduleCronTool(cronScheduler))
   .register(new ListCronsTool(cronScheduler))
@@ -164,6 +185,8 @@ const baseInstructions =
   "You may call compact after finishing a phase to free context space. " +
   "For multi-task work, create all task nodes first with create_task, then use " +
   "update_task with the returned runtime IDs to add blockedBy dependencies. " +
+  "For parallel work, create task nodes, optionally bind worktrees, then spawn " +
+  "teammates and collect their results from team events. " +
   "Do not ask for approval yourself; for risky operations still request the tool call — " +
   "the harness will approve or deny before execution.";
 
@@ -171,8 +194,11 @@ const agent = new FunctionCallAgent("alignment-agent", llm, registry, {
   config: new AgentConfig({ verbose: true }),
   traceLog,
   hooks,
-  // s11：每次调用模型前收集已完成的后台命令并以 <task_notification> 注入
-  collectNotifications: () => background.collect(),
+  // s11/s13：后台命令通知 + teammate 团队事件都在下一次模型调用前注入
+  collectNotifications: async () => [
+    ...background.collect(),
+    ...(await teamManager.collectLeadEvents()),
+  ],
   contextCompactor: compactor,
   // s09：每次运行前召回相关记忆注入 system（背景知识，非新指令）
   systemPromptBuilder: async (input: string) => {
@@ -249,6 +275,9 @@ const prompts: [string, string][] = [
   ["s12", "Schedule 'run date' every 2 minutes and keep it after restart.（观察 .scheduled_tasks.json）"],
   ["s12", "List all cron jobs."],
   ["s12", "Cancel the cron job you just created."],
+  ["s13", "Create two independent tasks: inspect README and inspect package.json. Spawn two teammates to claim and complete them, then summarize team events."],
+  ["s13", "Create a pending task called worktree-demo, bind a worktree named demo-wt, and show the task JSON."],
+  ["s13", "Spawn a teammate named reviewer with a required plan. Ask it to plan a small README summary, review the submitted plan, and approve it."],
   ["s14", "Connect the docs server, search for agent hooks, and tell me the current documentation API version.（观察 mcp__docs__ 工具出现）"],
   ["s14", "Connect the deploy server, check the web service status, and do NOT trigger a deployment.（status 放行 / trigger 需确认）"],
 ];

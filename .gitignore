@@ -47,3 +47,7 @@ test.txt
 # s10 任务系统 / s11 后台任务运行时产物
 .tasks/
 .scheduled_tasks.json
+
+# s13 Agent Teams 运行时产物
+.mailboxes/
+.worktrees/
