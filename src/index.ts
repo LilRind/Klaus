@@ -15,6 +15,8 @@ export * from "./hooks/hook-registry";
 export * from "./todo/todo-manager";
 export * from "./tools/builtin/todo-write-tool";
 export * from "./tools/builtin/task-tool";
+export * from "./tasks/task-store";
+export * from "./tools/builtin/task-tools";
 export * from "./skills/skill-loader";
 export * from "./tools/builtin/skill-tool";
 export * from "./tools/builtin/calculator";

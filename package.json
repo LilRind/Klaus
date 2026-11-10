@@ -41,6 +41,7 @@
     "example:alignment:s07": "tsx examples/alignment/alignment-demo.ts s07",
     "example:alignment:s08": "tsx examples/alignment/alignment-demo.ts s08",
     "example:alignment:s09": "tsx examples/alignment/alignment-demo.ts s09",
+    "example:alignment:s10": "tsx examples/alignment/alignment-demo.ts s10",
     "example:alignment:repl": "tsx examples/alignment/alignment-repl.ts"
   },
   "dependencies": {

@@ -14,6 +14,7 @@ knowledge_uploads/
 S01-S03对齐方案.md
 S01-S03功能与验证指南.md
 S04-S09对齐方案.md
+Needs_improvement/
 ar/
 记录.md
 第*章-记录.md
@@ -39,3 +40,6 @@ test.txt
 .transcripts/
 .task_outputs/
 .memory/
+
+# s10 任务系统 / s11 后台任务运行时产物
+.tasks/

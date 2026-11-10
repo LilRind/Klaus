@@ -1,5 +1,5 @@
 /**
- * s01–s09 对齐演示（真实 LLM 手动验证入口，对应各章 README 的"试一下"）
+ * s01–s10 对齐演示（真实 LLM 手动验证入口，对应各章 README 的"试一下"）
  *
  * 运行：npm run example:alignment（需要 .env 配置 LLM_API_KEY / LLM_MODEL_ID 等）
  * 分章：npm run example:alignment -- s04（s01…s09 任选，多章用逗号分隔）
@@ -45,6 +45,8 @@ import {
   buildMemorySystem,
   extractMemories,
   consolidateMemories,
+  TaskStore,
+  createTaskTools,
 } from "../../src/index";
 import path from "node:path";
 import { Message } from "../../src/core/message";
@@ -79,6 +81,12 @@ const compactor = new ContextCompactor(llm, {
 // s09：持久记忆目录（.memory/*.md + MEMORY.md 索引）
 const memoryDir = path.join(workspace, ".memory");
 
+// s10：任务系统（.tasks/*.json 持久任务图，两阶段建图：先建节点再补边）
+const taskStore = new TaskStore({
+  directory: path.join(workspace, ".tasks"),
+  workspaceRoot: workspace,
+});
+
 // 基础工具集（s06 子 agent 共享同一批工具实例 + 权限 + hooks）
 const baseTools = [
   new ReadFileTool({ workspace, allowOutsideWorkspace: true }),
@@ -98,6 +106,9 @@ const registry = new ToolRegistry();
 for (const tool of baseTools) {
   registry.register(tool);
 }
+for (const tool of createTaskTools(taskStore)) {
+  registry.register(tool);
+}
 registry
   .register(taskTool)
   .setPermissionChecker(permissionChecker)
@@ -109,6 +120,8 @@ const baseInstructions =
   "For multi-step tasks, plan first with todo_write and keep it updated as you work. " +
   "Delegate self-contained investigations to the task tool when a fresh context helps. " +
   "You may call compact after finishing a phase to free context space. " +
+  "For multi-task work, create all task nodes first with create_task, then use " +
+  "update_task with the returned runtime IDs to add blockedBy dependencies. " +
   "Do not ask for approval yourself; for risky operations still request the tool call — " +
   "the harness will approve or deny before execution.";
 
@@ -173,6 +186,10 @@ const prompts: [string, string][] = [
   ["s09", "What indentation style do I prefer?（重启进程后问同样问题可验证跨会话召回）"],
   ["s09", "I also prefer concise commit messages. Remember that.（观察相关性选择：与缩进无关）"],
   ["s09", "Do not create files in this session.（临时要求不应入库）"],
+  ["s10", "Create tasks: setup database schema, create API endpoints (depends on schema), write tests (depends on endpoints), write docs (depends on schema)（观察 .tasks/ 生成 JSON）"],
+  ["s10", "List all tasks and their statuses"],
+  ["s10", "Claim the first unblocked task and complete it"],
+  ["s10", "List tasks again — which ones are now unblocked?（观察依赖解锁）"],
 ];
 
 const stages = (process.argv[2] ?? "all")
@@ -183,7 +200,7 @@ const selected = stages.length
   ? prompts.filter(([chapter]) => stages.includes(chapter))
   : prompts;
 
-console.log(`s01–s09 对齐演示（工作区: ${workspace}，章节: ${stages.length ? stages.join(", ") : "全部"}）`);
+console.log(`s01–s10 对齐演示（工作区: ${workspace}，章节: ${stages.length ? stages.join(", ") : "全部"}）`);
 for (const [chapter, prompt] of selected) {
   console.log(`\n========== [${chapter}] ${prompt} ==========`);
   try {
