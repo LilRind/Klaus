@@ -18,6 +18,12 @@ import { parseJsonObjectArguments } from "../tools/tool";
 import type { ToolRegistry } from "../tools/registry";
 import { HookRegistry } from "../hooks/hook-registry";
 import { TODO_REMINDER_ROUNDS } from "../todo/todo-manager";
+import {
+  ContextCompactor,
+  isPromptTooLongError,
+  MAX_REACTIVE_RETRIES,
+} from "../context/compactor";
+import { COMPACT_TOOL_NAME } from "../tools/builtin/compact-tool";
 
 export interface FunctionCallAgentOptions {
   systemPrompt?: string;
@@ -30,6 +36,12 @@ export interface FunctionCallAgentOptions {
    * 权限闸门仍在 ToolRegistry 汇合点——hooks 是行为扩展，不是安全边界。
    */
   hooks?: HookRegistry;
+  /**
+   * 上下文压缩器（s08 对齐）：传入后每次调用模型前跑四步压缩管线，
+   * history 即工作数组（system 独立于 history，压缩永不动 system）。
+   * 不传时本 Agent 行为与 s07 之前完全一致（存量零回归的开关化设计）。
+   */
+  contextCompactor?: ContextCompactor;
 }
 
 export class FunctionCallAgent extends Agent {
@@ -37,6 +49,7 @@ export class FunctionCallAgent extends Agent {
   readonly maxToolIterations: number;
   private readonly traceLog: AgentTraceLog | undefined;
   private readonly hooks: HookRegistry;
+  private readonly contextCompactor: ContextCompactor | undefined;
   /** s05：连续未使用 todo_write 的工具轮数（reminder 计数器） */
   private roundsSinceTodoWrite = 0;
 
@@ -56,6 +69,7 @@ export class FunctionCallAgent extends Agent {
     this.maxToolIterations = options.maxToolIterations ?? this.config.maxToolIterations;
     this.traceLog = options.traceLog;
     this.hooks = options.hooks ?? new HookRegistry();
+    this.contextCompactor = options.contextCompactor;
   }
 
   override async run(input: string): Promise<string> {
@@ -72,7 +86,23 @@ export class FunctionCallAgent extends Agent {
 
     let response = "";
     for (let iteration = 0; iteration < this.maxToolIterations; iteration++) {
-      const result = await this.llm.invokeWithTools?.(conversation, tools);
+      // s08 对齐：每次调用模型前跑压缩管线（低成本优先，按需升级）；
+      // history 即工作数组——压缩结果原样写回，下一轮从压缩后的历史继续
+      if (this.contextCompactor) {
+        const compacted = await this.contextCompactor.prepare(
+          this.history,
+          input,
+        );
+        this.replaceHistory(compacted);
+        conversation.length = 0;
+        conversation.push(...this.buildConversation());
+      }
+
+      const result = await this.invokeWithToolsWithReactiveRetry(
+        conversation,
+        tools,
+        input,
+      );
       if (!result) break;
 
       if (result.toolCalls.length === 0) {
@@ -120,6 +150,7 @@ export class FunctionCallAgent extends Agent {
           toolCalls: result.toolCalls,
         }),
       );
+      let compactRequested = false;
       for (const call of result.toolCalls) {
         this.trace(`   > ${call.function.name}(${summarizeArgs(call.function.arguments)})`);
         await this.traceLog?.emit({
@@ -133,11 +164,19 @@ export class FunctionCallAgent extends Agent {
         // s04 对齐：PreToolUse 软拦截——非空返回值 = 本次执行被阻止，
         // 拦截原因作为 observation 回喂（不抛异常、循环继续，与权限拒绝同语义）
         const blocked = this.hooks.triggerPreToolUse(call);
-        const output =
-          blocked !== undefined
-            ? `⛔ hook 拦截: ${blocked}`
-            : await this.executeFunctionCall(call);
-        if (blocked === undefined) {
+        let output: string;
+        if (blocked !== undefined) {
+          output = `⛔ hook 拦截: ${blocked}`;
+        } else if (
+          this.contextCompactor &&
+          call.function.name === COMPACT_TOOL_NAME
+        ) {
+          // s08 对齐：模型主动请求压缩——确认文案先回喂，
+          // compactHistory 等本批全部工具执行完、结果全部回喂后再执行
+          output = "Compaction requested after this tool batch.";
+          compactRequested = true;
+        } else {
+          output = await this.executeFunctionCall(call);
           this.hooks.triggerPostToolUse(call, output);
         }
         await this.traceLog?.emit({
@@ -179,6 +218,19 @@ export class FunctionCallAgent extends Agent {
           conversation.push(reminder.toChatMessage());
           this.roundsSinceTodoWrite = 0;
         }
+      }
+
+      // s08 对齐：compact 请求在整批工具结果回喂后统一压缩——
+      // 不留孤立的 tool 消息，也不丢已发生副作用的执行记录
+      if (compactRequested && this.contextCompactor) {
+        const compacted = await this.contextCompactor.compactHistory(
+          this.history,
+          input,
+        );
+        this.replaceHistory(compacted);
+        conversation.length = 0;
+        conversation.push(...this.buildConversation());
+        this.trace("\n📦 compact：历史已替换为 [Compacted] 摘要（完整轨迹已归档）");
       }
     }
 
@@ -240,6 +292,48 @@ export class FunctionCallAgent extends Agent {
     } catch (error) {
       return `❌ ${error instanceof Error ? error.message : String(error)}`;
     }
+  }
+
+  /**
+   * 带 reactive 补救的模型调用（s08 对齐）：API 明确拒绝超长上下文时，
+   * 摘要较早历史并保留最近几条，重试至多 MAX_REACTIVE_RETRIES 次；
+   * 无 compactor 或非超长错误原样抛出。
+   */
+  private async invokeWithToolsWithReactiveRetry(
+    conversation: Parameters<NonNullable<ChatLLM["invokeWithTools"]>>[0],
+    tools: ReturnType<FunctionCallAgent["buildToolSchemas"]>,
+    activeRequest: string,
+  ) {
+    let retries = 0;
+    for (;;) {
+      try {
+        return await this.llm.invokeWithTools?.(conversation, tools);
+      } catch (error) {
+        if (
+          this.contextCompactor &&
+          retries < MAX_REACTIVE_RETRIES &&
+          isPromptTooLongError(error)
+        ) {
+          retries += 1;
+          const compacted = await this.contextCompactor.reactiveCompact(
+            this.history,
+            activeRequest,
+          );
+          this.replaceHistory(compacted);
+          conversation.length = 0;
+          conversation.push(...this.buildConversation());
+          this.trace(`\n⚡ reactive compact：上下文被拒后压缩重试（第 ${retries} 次）`);
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  /** 用压缩结果整体替换 history（history 引用只读、内容可变） */
+  private replaceHistory(messages: Message[]): void {
+    this.history.length = 0;
+    this.history.push(...messages);
   }
 
   /** 执行轨迹输出（config.verbose 开启时打印；对齐 s01/s02 的控制台 UX） */

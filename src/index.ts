@@ -25,6 +25,8 @@ export * from "./tools/builtin/note-tool";
 export * from "./tools/builtin/terminal-tool";
 export * from "./context/types";
 export * from "./context/builder";
+export * from "./context/compactor";
+export * from "./tools/builtin/compact-tool";
 export * from "./tools/chain";
 export * from "./tools/async-executor";
 export * from "./agents/simple-agent";
