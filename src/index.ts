@@ -5,6 +5,7 @@ export * from "./core/llm";
 export * from "./core/agent";
 export * from "./core/memory";
 export * from "./core/prompt";
+export * from "./core/trace-log";
 export * from "./tools/tool";
 export * from "./tools/registry";
 export * from "./tools/builtin/file-tools";

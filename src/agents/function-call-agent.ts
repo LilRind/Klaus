@@ -13,6 +13,7 @@ import type { ToolCallRequest } from "../core/message";
 import { AgentError } from "../core/exceptions";
 import { AgentConfig } from "../core/config";
 import { Message } from "../core/message";
+import type { AgentTraceLog } from "../core/trace-log";
 import { parseJsonObjectArguments } from "../tools/tool";
 import type { ToolRegistry } from "../tools/registry";
 
@@ -20,11 +21,14 @@ export interface FunctionCallAgentOptions {
   systemPrompt?: string;
   config?: AgentConfig;
   maxToolIterations?: number;
+  /** 执行轨迹日志（JSONL 审计 + md 转录），不传则不落盘 */
+  traceLog?: AgentTraceLog;
 }
 
 export class FunctionCallAgent extends Agent {
   readonly toolRegistry: ToolRegistry;
   readonly maxToolIterations: number;
+  private readonly traceLog: AgentTraceLog | undefined;
 
   constructor(
     name: string,
@@ -40,13 +44,16 @@ export class FunctionCallAgent extends Agent {
     }
     this.toolRegistry = toolRegistry;
     this.maxToolIterations = options.maxToolIterations ?? this.config.maxToolIterations;
+    this.traceLog = options.traceLog;
   }
 
   override async run(input: string): Promise<string> {
+    const startedAt = Date.now();
     // s01 对齐：输入先入 history，循环中的工具轨迹实时回写——
     // 下一次 run 的 conversation 自动携带上一轮的调用与结果，
     // 模型看得到之前"跑过什么命令、看到什么输出"（会话级全轨迹语义）
     this.addMessage(Message.user(input));
+    await this.traceLog?.emit({ type: "run_start", input });
     const conversation = this.buildConversation();
     const tools = this.buildToolSchemas();
 
@@ -58,6 +65,12 @@ export class FunctionCallAgent extends Agent {
       if (result.toolCalls.length === 0) {
         response = result.content ?? "";
         this.trace(`\n✔ 循环结束：模型未再调用工具（共 ${iteration + 1} 次模型调用）`);
+        await this.traceLog?.emit({ type: "loop_end", rounds: iteration + 1 });
+        await this.traceLog?.emit({
+          type: "run_end",
+          answer: response,
+          durationMs: Date.now() - startedAt,
+        });
         this.addMessage(Message.assistant(response));
         return response;
       }
@@ -82,7 +95,23 @@ export class FunctionCallAgent extends Agent {
       );
       for (const call of result.toolCalls) {
         this.trace(`   > ${call.function.name}(${summarizeArgs(call.function.arguments)})`);
+        await this.traceLog?.emit({
+          type: "tool_call",
+          iteration: iteration + 1,
+          toolCallId: call.id,
+          toolName: call.function.name,
+          args: call.function.arguments,
+        });
+        const toolStartedAt = Date.now();
         const output = await this.executeFunctionCall(call);
+        await this.traceLog?.emit({
+          type: "tool_result",
+          iteration: iteration + 1,
+          toolCallId: call.id,
+          toolName: call.function.name,
+          output,
+          durationMs: Date.now() - toolStartedAt,
+        });
         this.trace(`   = ${truncateForTrace(output)}`);
         conversation.push({
           role: "tool",
@@ -102,11 +131,17 @@ export class FunctionCallAgent extends Agent {
     // nudge 只进本轮 conversation、不入 history——持久化会让下一轮
     // 的模型看到"别再调工具"而不敢使用工具，污染后续任务
     this.trace(`\n⏹ 达到最大轮数（${this.maxToolIterations}），强制文本收尾`);
+    await this.traceLog?.emit({ type: "forced_final" });
     conversation.push({
       role: "user",
       content: "请根据以上工具执行结果，直接给出最终回答，不要再调用任何工具。",
     });
     response = await this.llm.invoke(conversation);
+    await this.traceLog?.emit({
+      type: "run_end",
+      answer: response,
+      durationMs: Date.now() - startedAt,
+    });
     this.addMessage(Message.assistant(response));
     return response;
   }

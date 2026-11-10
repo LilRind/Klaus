@@ -23,12 +23,14 @@ import {
   GlobTool,
   BashTool,
   AgentConfig,
+  AgentTraceLog,
   ConsoleApprovalPrompt,
   createStandardPermissionChecker,
 } from "../../src/index";
 
 const workspace = process.cwd();
 const llm = new OpenAICompatLLM();
+const traceLog = new AgentTraceLog("alignment-agent");
 
 // 演示装配（决策 5）：文件工具放开围栏，越区裁决权交给权限层
 const registry = new ToolRegistry()
@@ -46,6 +48,7 @@ const registry = new ToolRegistry()
 
 const agent = new FunctionCallAgent("alignment-agent", llm, registry, {
   config: new AgentConfig({ verbose: true }),
+  traceLog,
   systemPrompt:
     `You are a coding agent at ${workspace}. Environment: Windows; the bash tool runs cmd.exe. ` +
     "Use tools to solve tasks. Act, don't explain. " +

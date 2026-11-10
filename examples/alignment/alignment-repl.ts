@@ -10,6 +10,7 @@
  *   - help  列出三章 README 的"试一下"参考 prompt
  *   - q / exit 退出
  *   - del/rm 等破坏性命令、越区路径会弹 y/N 人工审批（拒绝安全）
+ *   - 每次运行的完整轨迹自动落盘 logs/agent-trace/*.jsonl（审计/复现）+ .md（可读）
  */
 
 import "dotenv/config";
@@ -25,6 +26,7 @@ import {
   GlobTool,
   BashTool,
   AgentConfig,
+  AgentTraceLog,
   createStandardPermissionChecker,
   type ApprovalPrompt,
   type PermissionRequest,
@@ -108,8 +110,10 @@ async function main(): Promise<void> {
       }),
     );
 
+  const traceLog = new AgentTraceLog("alignment-agent");
   const agent = new FunctionCallAgent("alignment-agent", llm, registry, {
     config: new AgentConfig({ verbose: true }),
+    traceLog,
     systemPrompt:
       `You are a coding agent at ${workspace}. Environment: Windows; the bash tool runs cmd.exe. ` +
       "Use tools to solve tasks. Act, don't explain. " +
