@@ -56,6 +56,14 @@ export interface FunctionCallAgentOptions {
     input: string;
     answer: string;
   }) => Promise<void>;
+  /**
+   * 每次调用 LLM 前收集后台完成通知（s11 对齐）：
+   * 返回的非空字符串以独立 role:"user" 消息注入（Anthropic 并入最后
+   * user 消息 text block 的 OpenAI 翻译，与 todo reminder 同一决策）。
+   * 注入发生在 compactor.prepare 之前（s15 管线顺序：通知 → 压缩）。
+   * 不传时行为与之前完全一致（存量零回归）。
+   */
+  collectNotifications?: () => string[] | Promise<string[]>;
 }
 
 export class FunctionCallAgent extends Agent {
@@ -73,6 +81,9 @@ export class FunctionCallAgent extends Agent {
         input: string;
         answer: string;
       }) => Promise<void>)
+    | undefined;
+  private readonly collectNotifications:
+    | (() => string[] | Promise<string[]>)
     | undefined;
   /** systemPromptBuilder 产出的本轮 system（run 期间生效） */
   private activeSystemPrompt: string | undefined;
@@ -98,6 +109,7 @@ export class FunctionCallAgent extends Agent {
     this.contextCompactor = options.contextCompactor;
     this.systemPromptBuilder = options.systemPromptBuilder;
     this.onRunCompleted = options.onRunCompleted;
+    this.collectNotifications = options.collectNotifications;
   }
 
   override async run(input: string): Promise<string> {
@@ -118,6 +130,22 @@ export class FunctionCallAgent extends Agent {
 
     let response = "";
     for (let iteration = 0; iteration < this.maxToolIterations; iteration++) {
+      // s11 对齐：每次调用模型前收集已完成的异步结果（后台命令等），
+      // 以 <task_notification> 独立 user 消息注入——工具调用已用占位结果
+      // 回喂过，通知不复用 tool_use_id
+      if (this.collectNotifications) {
+        const notifications = await this.collectNotifications();
+        for (const text of notifications) {
+          const notification = Message.user(text);
+          this.addMessage(notification);
+          conversation.push(notification.toChatMessage());
+        }
+        if (notifications.length > 0) {
+          this.trace(`\n🔔 注入 ${notifications.length} 条异步任务通知`);
+        }
+      }
+
+      // s08 对齐：每次调用模型前跑压缩管线（低成本优先，按需升级）；
       // s08 对齐：每次调用模型前跑压缩管线（低成本优先，按需升级）；
       // history 即工作数组——压缩结果原样写回，下一轮从压缩后的历史继续
       if (this.contextCompactor) {

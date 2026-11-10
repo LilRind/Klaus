@@ -1,5 +1,5 @@
 /**
- * s01–s10 对齐演示（真实 LLM 手动验证入口，对应各章 README 的"试一下"）
+ * s01–s11 对齐演示（真实 LLM 手动验证入口，对应各章 README 的"试一下"）
  *
  * 运行：npm run example:alignment（需要 .env 配置 LLM_API_KEY / LLM_MODEL_ID 等）
  * 分章：npm run example:alignment -- s04（s01…s09 任选，多章用逗号分隔）
@@ -47,6 +47,7 @@ import {
   consolidateMemories,
   TaskStore,
   createTaskTools,
+  BackgroundManager,
 } from "../../src/index";
 import path from "node:path";
 import { Message } from "../../src/core/message";
@@ -87,13 +88,16 @@ const taskStore = new TaskStore({
   workspaceRoot: workspace,
 });
 
+// s11：后台任务管理器（run_in_background=true 的 bash 命令后台执行）
+const background = new BackgroundManager({ cwd: workspace });
+
 // 基础工具集（s06 子 agent 共享同一批工具实例 + 权限 + hooks）
 const baseTools = [
   new ReadFileTool({ workspace, allowOutsideWorkspace: true }),
   new WriteFileTool({ workspace, allowOutsideWorkspace: true }),
   new EditFileTool({ workspace, allowOutsideWorkspace: true }),
   new GlobTool({ workspace, allowOutsideWorkspace: true }),
-  new BashTool({ cwd: workspace }),
+  new BashTool({ cwd: workspace, backgroundManager: background }),
   new TodoWriteTool(), // s05：计划工具（只更新状态，不执行工作）
   skillTool,
   new CompactTool(), // s08：模型主动请求压缩
@@ -129,6 +133,8 @@ const agent = new FunctionCallAgent("alignment-agent", llm, registry, {
   config: new AgentConfig({ verbose: true }),
   traceLog,
   hooks,
+  // s11：每次调用模型前收集已完成的后台命令并以 <task_notification> 注入
+  collectNotifications: () => background.collect(),
   contextCompactor: compactor,
   // s09：每次运行前召回相关记忆注入 system（背景知识，非新指令）
   systemPromptBuilder: async (input: string) => {
@@ -190,6 +196,9 @@ const prompts: [string, string][] = [
   ["s10", "List all tasks and their statuses"],
   ["s10", "Claim the first unblocked task and complete it"],
   ["s10", "List tasks again — which ones are now unblocked?（观察依赖解锁）"],
+  ["s11", "Run `node -e \"console.log('bg-ok')\"` in the background (use run_in_background), and read package.json while waiting（观察占位 bg_id）"],
+  ["s11", "List all Markdown files, then tell me the background result when it arrives（观察 <task_notification> 注入）"],
+  ["s11", "Run a 3-second background sleep (`node -e \"setTimeout(()=>console.log('slept'),3000)\"`), then continue with other work and collect the result later"],
 ];
 
 const stages = (process.argv[2] ?? "all")
@@ -200,7 +209,7 @@ const selected = stages.length
   ? prompts.filter(([chapter]) => stages.includes(chapter))
   : prompts;
 
-console.log(`s01–s10 对齐演示（工作区: ${workspace}，章节: ${stages.length ? stages.join(", ") : "全部"}）`);
+console.log(`s01–s11 对齐演示（工作区: ${workspace}，章节: ${stages.length ? stages.join(", ") : "全部"}）`);
 for (const [chapter, prompt] of selected) {
   console.log(`\n========== [${chapter}] ${prompt} ==========`);
   try {
@@ -210,3 +219,6 @@ for (const [chapter, prompt] of selected) {
     console.log(`执行失败: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
+
+// 尽力清理仍在运行的后台进程树（生命周期管理，非沙箱）
+await background.dispose();

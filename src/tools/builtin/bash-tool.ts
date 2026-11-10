@@ -11,11 +11,18 @@
  *
  * 执行语义对齐 s03：shell=True（Windows 走 cmd.exe）、cwd=工作区、
  * 120s 超时、输出截断 50000 字符、stdout+stderr 合并、空输出占位。
+ *
+ * s11 对齐：可选挂载 BackgroundManager 后，模型显式传
+ * run_in_background=true 的调用走后台路径——立即返回占位结果，
+ * 命令完成后再由 collectNotifications 以 <task_notification> 注入。
+ * 路由发生在 executeArgs 内部，即权限闸门（ToolRegistry 汇合点）之后——
+ * 被权限拒绝的命令不会进入后台（对齐 lcc execute_tool 的顺序）。
  */
 
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { Tool, tryParseJsonObject } from "../tool";
+import type { BackgroundManager } from "../../background/background-manager";
 
 const execAsync = promisify(exec);
 
@@ -26,6 +33,8 @@ export interface BashToolOptions {
   timeoutMs?: number;
   /** 输出截断字符数，默认 50_000（对齐 s03） */
   maxOutputChars?: number;
+  /** s11：挂载后支持 run_in_background=true 后台执行 */
+  backgroundManager?: BackgroundManager;
 }
 
 export class BashTool extends Tool {
@@ -46,6 +55,10 @@ export class BashTool extends Tool {
       type: "object",
       properties: {
         command: { type: "string", description: "要执行的命令（cmd.exe 语法）" },
+        run_in_background: {
+          type: "boolean",
+          description: "慢命令显式后台执行：立即返回 bg_id，结果稍后以通知注入",
+        },
       },
       required: ["command"],
     };
@@ -54,12 +67,14 @@ export class BashTool extends Tool {
   readonly workingDir: string;
   private readonly timeoutMs: number;
   private readonly maxOutputChars: number;
+  private readonly backgroundManager: BackgroundManager | undefined;
 
   constructor(options: BashToolOptions = {}) {
     super();
     this.workingDir = options.cwd ?? process.cwd();
     this.timeoutMs = options.timeoutMs ?? 120_000;
     this.maxOutputChars = options.maxOutputChars ?? 50_000;
+    this.backgroundManager = options.backgroundManager;
   }
 
   override async execute(input: string): Promise<string> {
@@ -76,6 +91,16 @@ export class BashTool extends Tool {
     if (!command) return "❌ 缺少必填参数 command（字符串）";
     if (/[\r\n]/.test(command)) {
       return "❌ command 不能包含换行符（一次一条命令）";
+    }
+
+    // s11：显式后台请求（仅布尔 true；缺省/字符串均同步，对齐 should_run_background）
+    if (args.run_in_background === true && this.backgroundManager) {
+      try {
+        const taskId = await this.backgroundManager.start(command);
+        return `[Background task ${taskId} started] The result will be collected on a later turn.`;
+      } catch (error) {
+        return `Error: ${error instanceof Error ? error.message : String(error)}`;
+      }
     }
 
     try {
