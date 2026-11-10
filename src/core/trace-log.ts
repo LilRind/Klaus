@@ -20,6 +20,7 @@ export type TraceEventType =
   | "run_start" // 用户输入进入循环
   | "tool_call" // 模型发起一次工具调用（PreToolUse 位置）
   | "tool_result" // 工具结果回喂（含 ⛔ 权限拒绝——拒绝也是 observation）
+  | "hook" // s04 四挂点触发（UserPromptSubmit/PreToolUse/PostToolUse/Stop）
   | "loop_end" // 模型未再调用工具，循环自然结束
   | "forced_final" // 达到最大轮数，强制文本收尾
   | "run_end"; // 最终回答返回
@@ -39,6 +40,10 @@ export interface TraceEvent {
   rounds?: number;
   answer?: string;
   durationMs?: number;
+  /** hook 事件：四挂点名（UserPromptSubmit / PreToolUse / PostToolUse / Stop） */
+  hookEvent?: string;
+  /** hook 事件附带的摘要（如拦截原因 / 输出规模 / 工具数统计） */
+  detail?: string;
 }
 
 /** md 转录里长文本的截断上限 */
@@ -163,6 +168,13 @@ function renderMarkdown(event: TraceEvent): string {
     case "tool_result":
       lines.push(
         `- 结果${event.durationMs !== undefined ? `（${event.durationMs}ms）` : ""}: ${clip(event.output ?? "")}`,
+        "",
+      );
+      break;
+    case "hook":
+      lines.push(
+        `### ${time} 🪝 hook ${event.hookEvent ?? "?"}${event.toolName ? ` · ${event.toolName}` : ""}`,
+        ...(event.detail ? ["", `- ${clip(event.detail)}`] : []),
         "",
       );
       break;

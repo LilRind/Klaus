@@ -36,6 +36,34 @@ function toolCall(id: string, name: string, args: string): ToolInvocationResult 
 }
 
 describe("AgentTraceLog 双格式落盘", () => {
+  it("hook 事件（s04 桥接）：jsonl 可读回，md 含挂点名与摘要", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "trace-"));
+    tempDirs.push(dir);
+    const log = new AgentTraceLog("agent-hook", dir);
+
+    await log.emit({
+      type: "hook",
+      hookEvent: "PreToolUse",
+      toolName: "write_file",
+      detail: "策略检查通过",
+    });
+    await log.emit({ type: "hook", hookEvent: "Stop" });
+
+    const events = await log.readDay();
+    expect(events.map((e) => e.type)).toEqual(["hook", "hook"]);
+    expect(events[0]?.hookEvent).toBe("PreToolUse");
+    expect(events[0]?.toolName).toBe("write_file");
+    expect(events[1]?.hookEvent).toBe("Stop");
+
+    const md = await readFile(
+      join(dir, `agent-hook-${new Date().toISOString().slice(0, 10)}.md`),
+      "utf8",
+    );
+    expect(md).toContain("🪝 hook PreToolUse · write_file");
+    expect(md).toContain("策略检查通过");
+    expect(md).toContain("🪝 hook Stop");
+  });
+
   it("emit 追加 JSONL（ts/session 自动补齐），readDay 可读回", async () => {
     const dir = await mkdtemp(join(tmpdir(), "trace-"));
     tempDirs.push(dir);

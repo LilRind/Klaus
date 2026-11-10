@@ -236,13 +236,49 @@ export async function buildAlignmentAgent(
   if (has(8)) baseTools.push(new CompactTool()); // s08
 
   // s04：四挂点示例 hook（权限闸门仍在 registry 汇合点，hooks 是扩展层）
-  const hooks = has(4)
-    ? new HookRegistry()
-        .register("UserPromptSubmit", contextInjectHook)
-        .register("PreToolUse", logHook)
-        .register("PostToolUse", largeOutputHook)
-        .register("Stop", summaryHook)
-    : undefined;
+  const hooks = has(4) ? new HookRegistry() : undefined;
+  if (hooks) {
+    // 桥接（先注册，短路前也留痕）：hook 事件落 AgentTraceLog——
+    // 控制台的 [HOOK] 日志是"当下看得见"，这里是"事后查得到"
+    hooks
+      .register("UserPromptSubmit", (query) => {
+        void traceLog.emit({
+          type: "hook",
+          hookEvent: "UserPromptSubmit",
+          detail: query.slice(0, 200),
+        });
+      })
+      .register("PreToolUse", (call) => {
+        void traceLog.emit({
+          type: "hook",
+          hookEvent: "PreToolUse",
+          toolName: call.function.name,
+        });
+        return undefined;
+      })
+      .register("PostToolUse", (call, output) => {
+        void traceLog.emit({
+          type: "hook",
+          hookEvent: "PostToolUse",
+          toolName: call.function.name,
+          detail: `output ${output.length} chars`,
+        });
+      })
+      .register("Stop", (history) => {
+        void traceLog.emit({
+          type: "hook",
+          hookEvent: "Stop",
+          detail: `${history.filter((m) => (m as { role?: string }).role === "tool").length} tool calls`,
+        });
+        return undefined;
+      });
+    // 控制台示例 hook（logHook / 大输出提醒 / 工作目录注入 / 收尾统计）
+    hooks
+      .register("UserPromptSubmit", contextInjectHook)
+      .register("PreToolUse", logHook)
+      .register("PostToolUse", largeOutputHook)
+      .register("Stop", summaryHook);
+  }
 
   // s06：task 工具（子注册表 = baseTools 剔除 task，单层委派）
   const taskTool = has(6)
