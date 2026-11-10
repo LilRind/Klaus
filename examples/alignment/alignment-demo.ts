@@ -1,5 +1,5 @@
 /**
- * s01–s12 对齐演示（真实 LLM 手动验证入口，对应各章 README 的"试一下"）
+ * s01–s14 对齐演示（真实 LLM 手动验证入口，对应各章 README 的"试一下"）
  *
  * 运行：npm run example:alignment（需要 .env 配置 LLM_API_KEY / LLM_MODEL_ID 等）
  * 分章：npm run example:alignment -- s04（s01…s09 任选，多章用逗号分隔）
@@ -53,6 +53,10 @@ import {
   ScheduleCronTool,
   ListCronsTool,
   CancelCronTool,
+  McpConnectionManager,
+  ConnectMcpTool,
+  createMcpPermissionChecker,
+  createStandardPermissionRules,
 } from "../../src/index";
 import path from "node:path";
 import { Message } from "../../src/core/message";
@@ -68,10 +72,19 @@ const hooks = new HookRegistry()
   .register("PostToolUse", largeOutputHook)
   .register("Stop", summaryHook);
 
-// 演示装配（决策 5）：文件工具放开围栏，越区裁决权交给权限层
-const permissionChecker = createStandardPermissionChecker({
-  workspaceRoot: workspace,
-  prompt: new ConsoleApprovalPrompt(),
+// 演示装配（决策 5 + s14）：标准规则之上叠加 MCP 宿主策略
+//（未配置的外部工具默认 confirm；server 自述 readOnly 不作为授权）
+const mcpManager = new McpConnectionManager();
+const standardRules = createStandardPermissionRules({ workspaceRoot: workspace });
+const approvalPrompt = new ConsoleApprovalPrompt();
+const permissionChecker = createMcpPermissionChecker({
+  manager: mcpManager,
+  base: {
+    denyRules: standardRules.denyRules,
+    askRules: standardRules.askRules,
+    prompt: approvalPrompt,
+  },
+  prompt: approvalPrompt,
 });
 
 // s07：启动时扫描技能目录（目录进 system prompt，全文走 load_skill）
@@ -121,16 +134,23 @@ const baseTools = [
 const taskTool = createTaskTool({ llm, tools: baseTools, permissionChecker, hooks });
 
 const registry = new ToolRegistry();
+const builtinToolNames: string[] = [];
 for (const tool of baseTools) {
   registry.register(tool);
+  builtinToolNames.push(tool.name);
 }
 for (const tool of createTaskTools(taskStore)) {
   registry.register(tool);
+  builtinToolNames.push(tool.name);
 }
 registry
   .register(new ScheduleCronTool(cronScheduler))
   .register(new ListCronsTool(cronScheduler))
-  .register(new CancelCronTool(cronScheduler));
+  .register(new CancelCronTool(cronScheduler))
+  .register(new ConnectMcpTool(mcpManager));
+builtinToolNames.push("schedule_cron", "list_crons", "cancel_cron", "connect_mcp");
+// s14：每轮组装动态工具池（连接 MCP server 后下一轮即可见新工具）
+registry.setDynamicToolProvider(() => mcpManager.assembleTools(builtinToolNames));
 registry
   .register(taskTool)
   .setPermissionChecker(permissionChecker)
@@ -229,6 +249,8 @@ const prompts: [string, string][] = [
   ["s12", "Schedule 'run date' every 2 minutes and keep it after restart.（观察 .scheduled_tasks.json）"],
   ["s12", "List all cron jobs."],
   ["s12", "Cancel the cron job you just created."],
+  ["s14", "Connect the docs server, search for agent hooks, and tell me the current documentation API version.（观察 mcp__docs__ 工具出现）"],
+  ["s14", "Connect the deploy server, check the web service status, and do NOT trigger a deployment.（status 放行 / trigger 需确认）"],
 ];
 
 const stages = (process.argv[2] ?? "all")
@@ -239,7 +261,7 @@ const selected = stages.length
   ? prompts.filter(([chapter]) => stages.includes(chapter))
   : prompts;
 
-console.log(`s01–s12 对齐演示（工作区: ${workspace}，章节: ${stages.length ? stages.join(", ") : "全部"}）`);
+console.log(`s01–s14 对齐演示（工作区: ${workspace}，章节: ${stages.length ? stages.join(", ") : "全部"}）`);
 for (const [chapter, prompt] of selected) {
   console.log(`\n========== [${chapter}] ${prompt} ==========`);
   try {

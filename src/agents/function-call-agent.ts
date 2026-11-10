@@ -126,10 +126,13 @@ export class FunctionCallAgent extends Agent {
     this.addMessage(Message.user(input));
     await this.traceLog?.emit({ type: "run_start", input });
     const conversation = this.buildConversation();
-    const tools = this.buildToolSchemas();
 
     let response = "";
     for (let iteration = 0; iteration < this.maxToolIterations; iteration++) {
+      // s14 对齐：每轮重新组装工具池——connect_mcp 等连接动作生效后，
+      // 下一轮模型调用即可看到新工具（静态注册表场景零开销差异）
+      const tools = this.buildToolSchemas();
+
       // s11 对齐：每次调用模型前收集已完成的异步结果（后台命令等），
       // 以 <task_notification> 独立 user 消息注入——工具调用已用占位结果
       // 回喂过，通知不复用 tool_use_id

@@ -21,6 +21,8 @@ export * from "./tools/builtin/task-tools";
 export * from "./scheduler/cron";
 export * from "./scheduler/cron-scheduler";
 export * from "./tools/builtin/cron-tools";
+export * from "./mcp/mcp";
+export * from "./tools/builtin/connect-mcp-tool";
 export * from "./skills/skill-loader";
 export * from "./tools/builtin/skill-tool";
 export * from "./tools/builtin/calculator";

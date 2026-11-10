@@ -25,6 +25,12 @@ export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
 
   private permissionChecker: PermissionChecker | undefined;
+  /**
+   * 动态工具提供器（s14 对齐）：每轮组装时调用，返回当前可用的
+   * 动态工具（如已连接的 MCP 工具）。静态工具优先；提供器抛错向上传播
+   * （对齐 lcc assemble_tool_pool 的命名冲突 ValueError）。
+   */
+  private dynamicToolProvider: (() => Tool[]) | undefined;
 
   register(tool: Tool): this {
     this.tools.set(tool.name, tool);
@@ -46,16 +52,26 @@ export class ToolRegistry {
     return this;
   }
 
+  /** 安装动态工具提供器（s14：MCP 等连接后按轮组装） */
+  setDynamicToolProvider(provider?: () => Tool[]): this {
+    this.dynamicToolProvider = provider;
+    return this;
+  }
+
   unregister(name: string): boolean {
     return this.tools.delete(name);
   }
 
   getTool(name: string): Tool | undefined {
-    return this.tools.get(name);
+    return this.tools.get(name) ?? this.dynamicTools().find((tool) => tool.name === name);
   }
 
   listTools(): Tool[] {
-    return [...this.tools.values()];
+    return [...this.tools.values(), ...this.dynamicTools()];
+  }
+
+  private dynamicTools(): Tool[] {
+    return this.dynamicToolProvider?.() ?? [];
   }
 
   get size(): number {
@@ -127,7 +143,7 @@ export class ToolRegistry {
   }
 
   private mustGetTool(name: string): Tool {
-    const tool = this.tools.get(name);
+    const tool = this.getTool(name);
     if (!tool) throw new ToolNotFoundError(name, [...this.tools.keys()]);
     return tool;
   }
