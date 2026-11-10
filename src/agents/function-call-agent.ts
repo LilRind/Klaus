@@ -16,6 +16,7 @@ import { Message } from "../core/message";
 import type { AgentTraceLog } from "../core/trace-log";
 import { parseJsonObjectArguments } from "../tools/tool";
 import type { ToolRegistry } from "../tools/registry";
+import { HookRegistry } from "../hooks/hook-registry";
 
 export interface FunctionCallAgentOptions {
   systemPrompt?: string;
@@ -23,12 +24,18 @@ export interface FunctionCallAgentOptions {
   maxToolIterations?: number;
   /** 执行轨迹日志（JSONL 审计 + md 转录），不传则不落盘 */
   traceLog?: AgentTraceLog;
+  /**
+   * Hook 注册表（s04 对齐）：四挂点扩展层，不传则为空注册表（零影响）。
+   * 权限闸门仍在 ToolRegistry 汇合点——hooks 是行为扩展，不是安全边界。
+   */
+  hooks?: HookRegistry;
 }
 
 export class FunctionCallAgent extends Agent {
   readonly toolRegistry: ToolRegistry;
   readonly maxToolIterations: number;
   private readonly traceLog: AgentTraceLog | undefined;
+  private readonly hooks: HookRegistry;
 
   constructor(
     name: string,
@@ -45,10 +52,13 @@ export class FunctionCallAgent extends Agent {
     this.toolRegistry = toolRegistry;
     this.maxToolIterations = options.maxToolIterations ?? this.config.maxToolIterations;
     this.traceLog = options.traceLog;
+    this.hooks = options.hooks ?? new HookRegistry();
   }
 
   override async run(input: string): Promise<string> {
     const startedAt = Date.now();
+    // s04 对齐：用户输入提交后、进入 LLM 前触发（通知型，不参与控制流）
+    this.hooks.triggerUserPromptSubmit(input);
     // s01 对齐：输入先入 history，循环中的工具轨迹实时回写——
     // 下一次 run 的 conversation 自动携带上一轮的调用与结果，
     // 模型看得到之前"跑过什么命令、看到什么输出"（会话级全轨迹语义）
@@ -63,6 +73,21 @@ export class FunctionCallAgent extends Agent {
       if (!result) break;
 
       if (result.toolCalls.length === 0) {
+        // 对齐 s04：assistant 最终响应先进轨迹，再触发 Stop——
+        // hook 决定续跑时，模型上一轮说过的话对后续轮次可见
+        const assistantMessage = new Message(result.content ?? "", "assistant");
+        this.addMessage(assistantMessage);
+        conversation.push(assistantMessage.toChatMessage());
+        // s04 对齐：循环自然退出前触发 Stop；hook 返回非空 → 注入消息强制续跑
+        //（续跑消耗迭代配额，保留有界安全；nudge 强制收尾路径不触发 Stop）
+        const force = this.hooks.triggerStop(this.history);
+        if (force !== undefined) {
+          this.trace(`\n↩ Stop hook 强制续跑: ${force.slice(0, 80)}`);
+          const forceMessage = Message.user(force);
+          this.addMessage(forceMessage);
+          conversation.push(forceMessage.toChatMessage());
+          continue;
+        }
         response = result.content ?? "";
         this.trace(`\n✔ 循环结束：模型未再调用工具（共 ${iteration + 1} 次模型调用）`);
         await this.traceLog?.emit({ type: "loop_end", rounds: iteration + 1 });
@@ -71,7 +96,6 @@ export class FunctionCallAgent extends Agent {
           answer: response,
           durationMs: Date.now() - startedAt,
         });
-        this.addMessage(Message.assistant(response));
         return response;
       }
 
@@ -103,7 +127,16 @@ export class FunctionCallAgent extends Agent {
           args: call.function.arguments,
         });
         const toolStartedAt = Date.now();
-        const output = await this.executeFunctionCall(call);
+        // s04 对齐：PreToolUse 软拦截——非空返回值 = 本次执行被阻止，
+        // 拦截原因作为 observation 回喂（不抛异常、循环继续，与权限拒绝同语义）
+        const blocked = this.hooks.triggerPreToolUse(call);
+        const output =
+          blocked !== undefined
+            ? `⛔ hook 拦截: ${blocked}`
+            : await this.executeFunctionCall(call);
+        if (blocked === undefined) {
+          this.hooks.triggerPostToolUse(call, output);
+        }
         await this.traceLog?.emit({
           type: "tool_result",
           iteration: iteration + 1,

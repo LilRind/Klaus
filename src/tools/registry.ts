@@ -62,6 +62,23 @@ export class ToolRegistry {
     return this.tools.size;
   }
 
+  /**
+   * 对齐装配校验（决策 5）：注册表内任一工具缺 executeArgs 即抛错。
+   * 对齐线（coding agent 装配）必调——新工具全部结构化，证明
+   * flattenArguments 兜底在该装配下永远不会触发；教学线装配不调。
+   */
+  assertAllStructured(): this {
+    const unstructured = this.listTools()
+      .filter((tool) => typeof tool.executeArgs !== "function")
+      .map((tool) => tool.name);
+    if (unstructured.length > 0) {
+      throw new Error(
+        `对齐装配要求全部工具实现 executeArgs，以下工具仍是纯字符串契约: ${unstructured.join(", ")}`,
+      );
+    }
+    return this;
+  }
+
   /** 生成编号列表形式的工具菜单（拼入提示词） */
   getToolsDescription(): string {
     if (this.tools.size === 0) return "暂无可用工具";

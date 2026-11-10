@@ -11,6 +11,7 @@ export * from "./tools/registry";
 export * from "./tools/builtin/file-tools";
 export * from "./tools/builtin/bash-tool";
 export * from "./security/permission";
+export * from "./hooks/hook-registry";
 export * from "./tools/builtin/calculator";
 export * from "./tools/builtin/search";
 export * from "./tools/builtin/memory-tool";
