@@ -12,6 +12,7 @@ demo_rag_kb/
 # 本地私密文档（学习记录/剩余事项/上传的面试纪要等，绝不入库）
 knowledge_uploads/
 S01-S03对齐方案.md
+S01-S03功能与验证指南.md
 ar/
 记录.md
 第*章-记录.md
