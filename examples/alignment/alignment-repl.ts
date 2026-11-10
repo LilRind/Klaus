@@ -2,7 +2,11 @@
  * s01–s14 对齐交互式会话（单会话多轮聊天，Claude Code 式体验）
  *
  * 运行：npm run example:alignment:repl（需要 .env 配置真实 LLM）
- * 指定工作区：npm run example:alignment:repl -- C:\temp\agent-sandbox
+ * 按章装配：npm run example:alignment:repl -- --stage s05
+ *   （lcc 语义：只装配 s01–s05 机制——verbose 不再混入 task/skills/
+ *    compact/memory/cron 等超纲工具；缺省 s14 全量）
+ * 指定工作区：npm run example:alignment:repl -- --workspace C:\temp\agent-sandbox
+ *   （裸位置参数也当工作区，向后兼容：npm run example:alignment:repl -- C:\temp\ws）
  *   （强烈建议用临时目录；默认在当前目录真实读写/执行命令）
  *
  * 用法：
@@ -22,7 +26,11 @@
 import "dotenv/config";
 import { createInterface } from "node:readline";
 import type { ApprovalPrompt, PermissionRequest } from "../../src/index";
-import { ALIGNMENT_PROMPTS, buildAlignmentAgent } from "./agent-assembly";
+import {
+  ALIGNMENT_PROMPTS,
+  buildAlignmentAgent,
+  parseAlignmentStage,
+} from "./agent-assembly";
 
 /**
  * 共享同一个行队列的审批器：主循环与审批提示都从同一个队列取行，
@@ -39,18 +47,48 @@ class ReplApprovalPrompt implements ApprovalPrompt {
   }
 }
 
-function printHelp(chapter?: string): void {
+function parseArgs(argv: string[]): { stage?: string; workspace?: string } {
+  const out: { stage?: string; workspace?: string } = {};
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === undefined) continue;
+    if (arg === "--stage") {
+      out.stage = argv[++i];
+    } else if (arg.startsWith("--stage=")) {
+      out.stage = arg.slice("--stage=".length);
+    } else if (arg === "--workspace" || arg === "-w") {
+      out.workspace = argv[++i];
+    } else if (out.workspace === undefined) {
+      out.workspace = arg; // 裸位置参数 = 工作区（向后兼容）
+    }
+  }
+  return out;
+}
+
+function printHelp(chapter: string | undefined, stageLevel: number): void {
   const filter = chapter?.trim().toLowerCase();
-  const prompts = filter
-    ? ALIGNMENT_PROMPTS.filter(([stage]) => stage === filter)
-    : ALIGNMENT_PROMPTS;
-  if (prompts.length === 0) {
+  const stageName = (n: number): string => `s${String(n).padStart(2, "0")}`;
+  const visible = ALIGNMENT_PROMPTS.filter(([stage]) =>
+    filter
+      ? stage === filter
+      : Number(stage.slice(1)) <= stageLevel,
+  );
+  if (filter) {
+    const chapterLevel = parseAlignmentStage(filter);
+    if (chapterLevel > stageLevel) {
+      console.log(
+        `\n注意: [${filter}] 超出当前装配层级 ${stageName(stageLevel)}——以下 prompt 仅作参考，` +
+          `需要该章机制请用 --stage ${filter} 重启。`,
+      );
+    }
+  }
+  if (visible.length === 0) {
     console.log(`\n没有 [${filter}] 章节；可用: s01 … s14`);
     return;
   }
   console.log(
-    `\n各章 README 的"试一下"参考 prompt${filter ? `（${filter}）` : "（help <章节> 可过滤）"}：` +
-      `\n${prompts.map(([stage, p]) => `  [${stage}] ${p}`).join("\n")}\n`,
+    `\n各章 README 的"试一下"参考 prompt${filter ? `（${filter}）` : `（装配到 ${stageName(stageLevel)}）`}：` +
+      `\n${visible.map(([stage, p]) => `  [${stage}] ${p}`).join("\n")}\n`,
   );
 }
 
@@ -88,14 +126,26 @@ async function main(): Promise<void> {
     return pending.shift() ?? null;
   };
 
-  const { agent, workspace, memoryDir, pumpCron, dispose } = await buildAlignmentAgent({
-    workspace: process.argv[2] ?? process.cwd(),
-    prompt: new ReplApprovalPrompt(readLine),
-  });
+  const args = parseArgs(process.argv);
+  const { agent, workspace, memoryDir, stage, toolNames, features, pumpCron, dispose } =
+    await buildAlignmentAgent({
+      workspace: args.workspace ?? process.cwd(),
+      stage: args.stage,
+      prompt: new ReplApprovalPrompt(readLine),
+    });
 
-  console.log(`s01–s14 对齐交互式会话（工作区: ${workspace}）`);
-  console.log("输入 prompt 回车发送 | help [s01…s14] 查看参考 prompt | q 退出");
-  console.log(`持久记忆目录: ${memoryDir}（退出重进，记忆仍在——s09 跨会话验证入口）\n`);
+  const stageName = `s${String(stage).padStart(2, "0")}`;
+  console.log(`对齐交互式会话（工作区: ${workspace}）`);
+  console.log(
+    `装配层级: ${stageName}${stage >= 14 ? "（s01–s14 全量）" : `（s01–${stageName} 机制）`}`,
+  );
+  console.log(`工具(${toolNames.length}): ${toolNames.join(", ")}`);
+  if (features.memory) {
+    console.log(
+      `持久记忆目录: ${memoryDir}（退出重进，记忆仍在——s09 跨会话验证入口）`,
+    );
+  }
+  console.log("输入 prompt 回车发送 | help [s01…s14] 查看参考 prompt | q 退出\n");
 
   while (true) {
     const raw = await readLine("alignment >> ");
@@ -104,7 +154,7 @@ async function main(): Promise<void> {
     if (!query) continue;
     if (["q", "exit", "quit"].includes(query.toLowerCase())) break;
     if (query.toLowerCase() === "help" || query.toLowerCase().startsWith("help ")) {
-      printHelp(query.slice(4).trim() || undefined);
+      printHelp(query.slice(4).trim() || undefined, stage);
       continue;
     }
     try {
@@ -121,7 +171,11 @@ async function main(): Promise<void> {
 
   rl.close();
   await dispose();
-  console.log("再见（.memory/ 记忆已保留，重进 REPL 可继续验证跨会话召回）");
+  console.log(
+    features.memory
+      ? "再见（.memory/ 记忆已保留，重进 REPL 可继续验证跨会话召回）"
+      : "再见",
+  );
 }
 
 await main();
