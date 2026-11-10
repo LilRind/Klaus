@@ -1,5 +1,5 @@
 /**
- * s01–s11 对齐演示（真实 LLM 手动验证入口，对应各章 README 的"试一下"）
+ * s01–s12 对齐演示（真实 LLM 手动验证入口，对应各章 README 的"试一下"）
  *
  * 运行：npm run example:alignment（需要 .env 配置 LLM_API_KEY / LLM_MODEL_ID 等）
  * 分章：npm run example:alignment -- s04（s01…s09 任选，多章用逗号分隔）
@@ -48,6 +48,11 @@ import {
   TaskStore,
   createTaskTools,
   BackgroundManager,
+  CronScheduler,
+  ScheduledTurnRunner,
+  ScheduleCronTool,
+  ListCronsTool,
+  CancelCronTool,
 } from "../../src/index";
 import path from "node:path";
 import { Message } from "../../src/core/message";
@@ -91,6 +96,15 @@ const taskStore = new TaskStore({
 // s11：后台任务管理器（run_in_background=true 的 bash 命令后台执行）
 const background = new BackgroundManager({ cwd: workspace });
 
+// s12：cron 调度器（durable 任务落 .scheduled_tasks.json；到期先入队、空闲交付）
+const cronScheduler = new CronScheduler({
+  statePath: path.join(workspace, ".scheduled_tasks.json"),
+});
+const cronLoadResult = await cronScheduler.loadDurableJobs();
+if (cronLoadResult.errors.length > 0) {
+  console.warn(`[cron] 恢复告警: ${cronLoadResult.errors.join("; ")}`);
+}
+
 // 基础工具集（s06 子 agent 共享同一批工具实例 + 权限 + hooks）
 const baseTools = [
   new ReadFileTool({ workspace, allowOutsideWorkspace: true }),
@@ -113,6 +127,10 @@ for (const tool of baseTools) {
 for (const tool of createTaskTools(taskStore)) {
   registry.register(tool);
 }
+registry
+  .register(new ScheduleCronTool(cronScheduler))
+  .register(new ListCronsTool(cronScheduler))
+  .register(new CancelCronTool(cronScheduler));
 registry
   .register(taskTool)
   .setPermissionChecker(permissionChecker)
@@ -161,6 +179,15 @@ const agent = new FunctionCallAgent("alignment-agent", llm, registry, {
   },
 });
 
+// s12：到期任务空闲交付（[Scheduled] prompt 触发一轮；异步回合拒绝交互确认）
+const scheduledRunner = new ScheduledTurnRunner({
+  scheduler: cronScheduler,
+  runTurn: async (prompt) => {
+    console.log(`\n⏰ [cron] 交付定时任务: ${prompt}`);
+    await agent.run(`[Scheduled] ${prompt}`);
+  },
+});
+
 const prompts: [string, string][] = [
   ["s01", 'Create a file called hello.py that prints "Hello, World!"'],
   ["s01", "List all Python files in this directory"],
@@ -199,6 +226,9 @@ const prompts: [string, string][] = [
   ["s11", "Run `node -e \"console.log('bg-ok')\"` in the background (use run_in_background), and read package.json while waiting（观察占位 bg_id）"],
   ["s11", "List all Markdown files, then tell me the background result when it arrives（观察 <task_notification> 注入）"],
   ["s11", "Run a 3-second background sleep (`node -e \"setTimeout(()=>console.log('slept'),3000)\"`), then continue with other work and collect the result later"],
+  ["s12", "Schedule 'run date' every 2 minutes and keep it after restart.（观察 .scheduled_tasks.json）"],
+  ["s12", "List all cron jobs."],
+  ["s12", "Cancel the cron job you just created."],
 ];
 
 const stages = (process.argv[2] ?? "all")
@@ -209,7 +239,7 @@ const selected = stages.length
   ? prompts.filter(([chapter]) => stages.includes(chapter))
   : prompts;
 
-console.log(`s01–s11 对齐演示（工作区: ${workspace}，章节: ${stages.length ? stages.join(", ") : "全部"}）`);
+console.log(`s01–s12 对齐演示（工作区: ${workspace}，章节: ${stages.length ? stages.join(", ") : "全部"}）`);
 for (const [chapter, prompt] of selected) {
   console.log(`\n========== [${chapter}] ${prompt} ==========`);
   try {
@@ -218,7 +248,14 @@ for (const [chapter, prompt] of selected) {
   } catch (error) {
     console.log(`执行失败: ${error instanceof Error ? error.message : String(error)}`);
   }
+  // s12：每个 prompt 之间轮询到期任务并在空闲时交付（至少一次语义）
+  await cronScheduler.pollDueJobs().catch((error) => {
+    console.warn(`[cron] 轮询失败: ${error}`);
+  });
+  await scheduledRunner.deliverDue().catch((error) => {
+    console.warn(`[cron] 交付失败（任务已重入队）: ${error}`);
+  });
 }
 
-// 尽力清理仍在运行的后台进程树（生命周期管理，非沙箱）
+// 收尾：尽力清理后台进程树；durable cron 任务保留（重启后恢复）
 await background.dispose();
