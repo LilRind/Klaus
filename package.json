@@ -35,6 +35,8 @@
     "example:9-06": "tsx examples/9/06-three-day-workflow.ts",
     "verify:9-real": "tsx examples/9/verify-real-llm.ts",
     "example:alignment": "tsx examples/alignment/alignment-demo.ts",
+    "example:alignment:s04": "tsx examples/alignment/alignment-demo.ts s04",
+    "example:alignment:s05": "tsx examples/alignment/alignment-demo.ts s05",
     "example:alignment:repl": "tsx examples/alignment/alignment-repl.ts"
   },
   "dependencies": {

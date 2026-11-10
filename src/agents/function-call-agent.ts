@@ -17,6 +17,7 @@ import type { AgentTraceLog } from "../core/trace-log";
 import { parseJsonObjectArguments } from "../tools/tool";
 import type { ToolRegistry } from "../tools/registry";
 import { HookRegistry } from "../hooks/hook-registry";
+import { TODO_REMINDER_ROUNDS } from "../todo/todo-manager";
 
 export interface FunctionCallAgentOptions {
   systemPrompt?: string;
@@ -36,6 +37,8 @@ export class FunctionCallAgent extends Agent {
   readonly maxToolIterations: number;
   private readonly traceLog: AgentTraceLog | undefined;
   private readonly hooks: HookRegistry;
+  /** s05：连续未使用 todo_write 的工具轮数（reminder 计数器） */
+  private roundsSinceTodoWrite = 0;
 
   constructor(
     name: string,
@@ -157,6 +160,25 @@ export class FunctionCallAgent extends Agent {
             toolCallId: call.id,
           }),
         );
+      }
+
+      // s05 对齐：连续 3 个工具轮未使用 todo_write → 注入 reminder 并清零。
+      // lcc 把 reminder 作为 text block 并入本轮 tool_results 的 user 消息；
+      // OpenAI 协议下翻译为独立 role:"user" 消息，语义等价（入 history）。
+      if (this.toolRegistry.getTool("todo_write")) {
+        const usedTodo = result.toolCalls.some(
+          (call) => call.function.name === "todo_write",
+        );
+        this.roundsSinceTodoWrite = usedTodo
+          ? 0
+          : this.roundsSinceTodoWrite + 1;
+        if (this.roundsSinceTodoWrite >= TODO_REMINDER_ROUNDS) {
+          this.trace("\n🔔 todo reminder：连续 3 轮未更新计划");
+          const reminder = Message.user("<reminder>Update your todos.</reminder>");
+          this.addMessage(reminder);
+          conversation.push(reminder.toChatMessage());
+          this.roundsSinceTodoWrite = 0;
+        }
       }
     }
 
