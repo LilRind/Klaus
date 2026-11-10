@@ -14,6 +14,7 @@ export * from "./security/permission";
 export * from "./hooks/hook-registry";
 export * from "./todo/todo-manager";
 export * from "./tools/builtin/todo-write-tool";
+export * from "./tools/builtin/task-tool";
 export * from "./tools/builtin/calculator";
 export * from "./tools/builtin/search";
 export * from "./tools/builtin/memory-tool";
