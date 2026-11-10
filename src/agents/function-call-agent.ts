@@ -42,6 +42,20 @@ export interface FunctionCallAgentOptions {
    * 不传时本 Agent 行为与 s07 之前完全一致（存量零回归的开关化设计）。
    */
   contextCompactor?: ContextCompactor;
+  /**
+   * 每次运行前重建 system prompt（s09 对齐：注入本轮召回的记忆）。
+   * 返回值作为本轮 system 消息；不传时用构造时的静态 systemPrompt。
+   */
+  systemPromptBuilder?: (input: string) => Promise<string>;
+  /**
+   * run 自然结束（模型不再调工具）后的回调（s09 对齐：回合后记忆提取）。
+   * 回调异常 fail-open——答案已产出，不因提取失败丢给调用方。
+   */
+  onRunCompleted?: (context: {
+    history: readonly Message[];
+    input: string;
+    answer: string;
+  }) => Promise<void>;
 }
 
 export class FunctionCallAgent extends Agent {
@@ -50,6 +64,18 @@ export class FunctionCallAgent extends Agent {
   private readonly traceLog: AgentTraceLog | undefined;
   private readonly hooks: HookRegistry;
   private readonly contextCompactor: ContextCompactor | undefined;
+  private readonly systemPromptBuilder:
+    | ((input: string) => Promise<string>)
+    | undefined;
+  private readonly onRunCompleted:
+    | ((context: {
+        history: readonly Message[];
+        input: string;
+        answer: string;
+      }) => Promise<void>)
+    | undefined;
+  /** systemPromptBuilder 产出的本轮 system（run 期间生效） */
+  private activeSystemPrompt: string | undefined;
   /** s05：连续未使用 todo_write 的工具轮数（reminder 计数器） */
   private roundsSinceTodoWrite = 0;
 
@@ -70,12 +96,18 @@ export class FunctionCallAgent extends Agent {
     this.traceLog = options.traceLog;
     this.hooks = options.hooks ?? new HookRegistry();
     this.contextCompactor = options.contextCompactor;
+    this.systemPromptBuilder = options.systemPromptBuilder;
+    this.onRunCompleted = options.onRunCompleted;
   }
 
   override async run(input: string): Promise<string> {
     const startedAt = Date.now();
     // s04 对齐：用户输入提交后、进入 LLM 前触发（通知型，不参与控制流）
     this.hooks.triggerUserPromptSubmit(input);
+    // s09 对齐：每次运行前重建 system（注入本轮召回的持久记忆）
+    if (this.systemPromptBuilder) {
+      this.activeSystemPrompt = await this.systemPromptBuilder(input);
+    }
     // s01 对齐：输入先入 history，循环中的工具轨迹实时回写——
     // 下一次 run 的 conversation 自动携带上一轮的调用与结果，
     // 模型看得到之前"跑过什么命令、看到什么输出"（会话级全轨迹语义）
@@ -129,6 +161,20 @@ export class FunctionCallAgent extends Agent {
           answer: response,
           durationMs: Date.now() - startedAt,
         });
+        // s09 对齐：回合自然结束后提取记忆（fail-open，不影响已产出的答案）
+        if (this.onRunCompleted) {
+          try {
+            await this.onRunCompleted({
+              history: this.history,
+              input,
+              answer: response,
+            });
+          } catch (error) {
+            console.warn(
+              `⚠️ [onRunCompleted] 回合后回调失败（答案不受影响）: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
         return response;
       }
 
@@ -334,6 +380,15 @@ export class FunctionCallAgent extends Agent {
   private replaceHistory(messages: Message[]): void {
     this.history.length = 0;
     this.history.push(...messages);
+  }
+
+  /** systemPromptBuilder 产出的 system 优先生效（s09 召回注入） */
+  protected override buildConversation() {
+    const conversation = super.buildConversation();
+    if (this.activeSystemPrompt !== undefined && conversation[0]?.role === "system") {
+      conversation[0] = { role: "system", content: this.activeSystemPrompt };
+    }
+    return conversation;
   }
 
   /** 执行轨迹输出（config.verbose 开启时打印；对齐 s01/s02 的控制台 UX） */

@@ -184,3 +184,9 @@ const answer = await agent.run("请帮我计算 (12+8)*3");
 - [x] 五种 Agent 范式（Simple / ReAct / Reflection / PlanAndSolve / FunctionCall）
 - [x] 工具链 / 多源搜索 / 异步执行器（7.5.3 / 7.5.4）
 - [x] 第 7 章全部配套文件（对应 code/chapter7 每个示例与测试）
+- [x] learn-claude-code s01–s03 对齐（结构化工具分发 / 三道闸门权限 / 会话级全轨迹）
+- [x] learn-claude-code s04–s06 对齐（hooks 四挂点 / todo_write+reminder / task 子 agent）
+- [x] learn-claude-code s07–s09 对齐（skill 按需加载 / 四步上下文压缩 / 文件式持久记忆）
+
+> 对齐机制全部落在 FunctionCallAgent 主线（教学线冻结不动）；验证入口
+> `npm run example:alignment`（分章 `example:alignment:s04` … `:s09`）。

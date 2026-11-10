@@ -27,6 +27,36 @@ export * from "./context/types";
 export * from "./context/builder";
 export * from "./context/compactor";
 export * from "./tools/builtin/compact-tool";
+// 持久记忆（s09）：与书第 7 章 core/memory 的同名概念刻意区分前缀导出
+export {
+  MEMORY_TYPES as PERSISTENT_MEMORY_TYPES,
+  type MemoryType as PersistentMemoryType,
+  type MemoryRecord as PersistentMemoryRecord,
+  isMemoryType as isPersistentMemoryType,
+  TEMPORARY_MEMORY_MARKERS,
+  MEMORY_INDEX_NAME,
+  RECALL_CHAR_LIMIT,
+  CONSOLIDATE_THRESHOLD,
+  CONSOLIDATE_INPUT_CHAR_LIMIT,
+  type MemoryCandidate,
+  memorySlug,
+  memoryPath,
+  validateMemoryRecord,
+  memoryDocument,
+  writeMemoryFile,
+  listMemoryFiles,
+  readMemoryFile,
+  rebuildMemoryIndex,
+  readMemoryIndex,
+  containsTemporaryMarker,
+  shouldStoreMemory,
+} from "./persistent-memory/store";
+export * from "./persistent-memory/recall";
+export * from "./persistent-memory/extract";
+export {
+  type ConsolidateOptions as MemoryConsolidateOptions,
+  consolidateMemories,
+} from "./persistent-memory/consolidate";
 export * from "./tools/chain";
 export * from "./tools/async-executor";
 export * from "./agents/simple-agent";
