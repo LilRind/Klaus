@@ -17,7 +17,7 @@ import { ToolRegistry } from "../src/tools/registry";
 import { FunctionTool } from "../src/tools/tool";
 import { WriteFileTool, ReadFileTool } from "../src/tools/builtin/file-tools";
 import { HookRegistry } from "../src/hooks/hook-registry";
-import type { PermissionChecker } from "../src/security/permission";
+import { PermissionChecker } from "../src/security/permission";
 import { ScriptedLLM } from "./scripted-llm";
 import type { ToolCallRequest } from "../src/core/message";
 import type { ToolInvocationResult } from "../src/core/llm";
@@ -42,6 +42,7 @@ function finalTurn(text: string): ToolInvocationResult {
 const echo = new FunctionTool((input) => `echo:${input}`, {
   name: "echo",
   description: "回声",
+  func: (input) => `echo:${input}`,
   parametersDescription: 'JSON: {"text": "..."}',
   parametersSchema: {
     type: "object",
@@ -115,9 +116,11 @@ describe("s06 Subagent", () => {
 
   it("共享权限闸门：子 agent 的工具调用同样被拒并回喂", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const checker: PermissionChecker = {
-      check: async () => ({ allowed: false, reason: "子任务禁止执行工具" }),
-    };
+    const checker = new PermissionChecker({
+      denyRules: [
+        { tools: ["echo"], test: () => "子任务禁止执行工具" },
+      ],
+    });
     const subLlm = new ScriptedLLM([], [
       turn(call("s1", "echo", { text: "hi" })),
       finalTurn("工具被拒，改为直接回答"),
