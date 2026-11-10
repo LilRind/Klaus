@@ -1,39 +1,28 @@
 /**
- * s01–s03 对齐交互式会话（复刻三章 code.py 的 REPL 体验）
+ * s01–s14 对齐交互式会话（单会话多轮聊天，Claude Code 式体验）
  *
- * 运行：npm run example:alignment:repl
+ * 运行：npm run example:alignment:repl（需要 .env 配置真实 LLM）
  * 指定工作区：npm run example:alignment:repl -- C:\temp\agent-sandbox
  *   （强烈建议用临时目录；默认在当前目录真实读写/执行命令）
  *
  * 用法：
- *   - 输入 prompt 回车发送；工具轨迹跨轮保留（s01 会话语义）
- *   - help  列出三章 README 的"试一下"参考 prompt
- *   - q / exit 退出
+ *   - 输入 prompt 回车发送；同一会话内工具轨迹跨轮保留（s01 会话语义），
+ *     模型看得到"之前跑过什么命令、看到什么输出"——这就是多轮聊天的底座；
+ *   - help        列出全部章节的参考 prompt
+ *   - help s05    只看某一章（s01…s14）
+ *   - q / exit    退出（Ctrl+C 也可）
  *   - del/rm 等破坏性命令、越区路径会弹 y/N 人工审批（拒绝安全）
- *   - 每次运行的完整轨迹自动落盘 logs/agent-trace/*.jsonl（审计/复现）+ .md（可读）
+ *   - 装配与批量演示完全同源（agent-assembly.ts）：hooks/todo/task/
+ *     skills/compact/memory/任务图/后台任务/cron/teammate/MCP 全量可用
+ *   - s09 跨会话验证：记忆落在工作区 .memory\，**退出重进 REPL 记忆仍在**，
+ *     直接问 "What indentation style do I prefer?" 即可验证跨会话召回
+ *   - 每次运行的完整轨迹自动落盘 logs/agent-trace/*.jsonl（审计/复现）+ .md
  */
 
 import "dotenv/config";
 import { createInterface } from "node:readline";
-import path from "node:path";
-import {
-  OpenAICompatLLM,
-  FunctionCallAgent,
-  ToolRegistry,
-  ReadFileTool,
-  WriteFileTool,
-  EditFileTool,
-  GlobTool,
-  BashTool,
-  AgentConfig,
-  AgentTraceLog,
-  createStandardPermissionChecker,
-  type ApprovalPrompt,
-  type PermissionRequest,
-} from "../../src/index";
-
-const workspace = path.resolve(process.argv[2] ?? process.cwd());
-const llm = new OpenAICompatLLM();
+import type { ApprovalPrompt, PermissionRequest } from "../../src/index";
+import { ALIGNMENT_PROMPTS, buildAlignmentAgent } from "./agent-assembly";
 
 /**
  * 共享同一个行队列的审批器：主循环与审批提示都从同一个队列取行，
@@ -50,19 +39,20 @@ class ReplApprovalPrompt implements ApprovalPrompt {
   }
 }
 
-const HELP_PROMPTS = [
-  "[s01] Create a file called hello.py that prints \"Hello, World!\"",
-  "[s01] List all Python files in this directory",
-  "[s01] What is the current git branch?",
-  "[s02] Read the file README.md and tell me what this project is about",
-  "[s02] Create a file called test.py that prints \"hello\", then read it back",
-  "[s02] Find all Python files in this directory",
-  "[s02] Read both README.md and requirements.txt, then create a summary file",
-  "[s03] Create a file called test.txt in the current directory",
-  "[s03] Delete the file test.txt",
-  "[s03] What files are in the current directory?",
-  "[s03] Try to write a file to /etc/something",
-];
+function printHelp(chapter?: string): void {
+  const filter = chapter?.trim().toLowerCase();
+  const prompts = filter
+    ? ALIGNMENT_PROMPTS.filter(([stage]) => stage === filter)
+    : ALIGNMENT_PROMPTS;
+  if (prompts.length === 0) {
+    console.log(`\n没有 [${filter}] 章节；可用: s01 … s14`);
+    return;
+  }
+  console.log(
+    `\n各章 README 的"试一下"参考 prompt${filter ? `（${filter}）` : "（help <章节> 可过滤）"}：` +
+      `\n${prompts.map(([stage, p]) => `  [${stage}] ${p}`).join("\n")}\n`,
+  );
+}
 
 async function main(): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -86,54 +76,35 @@ async function main(): Promise<void> {
     rl.close();
   });
   const readLine = async (prompt: string): Promise<string | null> => {
-    rl.setPrompt(prompt);
-    rl.prompt(true);
     while (pending.length === 0 && !closed) {
+      rl.setPrompt(prompt);
+      rl.prompt(true);
       await new Promise<void>((resolve) => {
         wake = resolve;
       });
     }
+    // 优先消费已缓存的输入行（管道 EOF 早于提示符时行已入队）；
+    // 无缓存且 stdin 已关闭才判终——不再碰已关闭的 readline
     return pending.shift() ?? null;
   };
 
-  // 演示装配（决策 5）：文件工具放开围栏，越区裁决权交给权限层
-  const registry = new ToolRegistry()
-    .register(new ReadFileTool({ workspace, allowOutsideWorkspace: true }))
-    .register(new WriteFileTool({ workspace, allowOutsideWorkspace: true }))
-    .register(new EditFileTool({ workspace, allowOutsideWorkspace: true }))
-    .register(new GlobTool({ workspace, allowOutsideWorkspace: true }))
-    .register(new BashTool({ cwd: workspace }))
-    .setPermissionChecker(
-      createStandardPermissionChecker({
-        workspaceRoot: workspace,
-        prompt: new ReplApprovalPrompt(readLine),
-      }),
-    );
-
-  const traceLog = new AgentTraceLog("alignment-agent");
-  const agent = new FunctionCallAgent("alignment-agent", llm, registry, {
-    config: new AgentConfig({ verbose: true }),
-    traceLog,
-    systemPrompt:
-      `You are a coding agent at ${workspace}. Environment: Windows; the bash tool runs cmd.exe. ` +
-      "Use tools to solve tasks. Act, don't explain. " +
-      "Do not ask for approval yourself; for risky operations still request the tool call — " +
-      "the harness will approve or deny before execution.",
+  const { agent, workspace, memoryDir, pumpCron, dispose } = await buildAlignmentAgent({
+    workspace: process.argv[2] ?? process.cwd(),
+    prompt: new ReplApprovalPrompt(readLine),
   });
 
-  console.log(`s01–s03 对齐交互式会话（工作区: ${workspace}）`);
-  console.log("输入 prompt 回车发送 | help 查看参考 prompt | q 退出\n");
+  console.log(`s01–s14 对齐交互式会话（工作区: ${workspace}）`);
+  console.log("输入 prompt 回车发送 | help [s01…s14] 查看参考 prompt | q 退出");
+  console.log(`持久记忆目录: ${memoryDir}（退出重进，记忆仍在——s09 跨会话验证入口）\n`);
 
   while (true) {
     const raw = await readLine("alignment >> ");
     if (raw === null) break; // Ctrl+C / EOF
     const query = raw.trim();
-    if (!query) {
-      continue;
-    }
+    if (!query) continue;
     if (["q", "exit", "quit"].includes(query.toLowerCase())) break;
-    if (query.toLowerCase() === "help") {
-      console.log(`\n三章 README 的"试一下"参考 prompt：\n${HELP_PROMPTS.map((p) => `  ${p}`).join("\n")}`);
+    if (query.toLowerCase() === "help" || query.toLowerCase().startsWith("help ")) {
+      printHelp(query.slice(4).trim() || undefined);
       continue;
     }
     try {
@@ -144,10 +115,13 @@ async function main(): Promise<void> {
         `\n执行失败: ${error instanceof Error ? error.message : String(error)}\n`,
       );
     }
+    // s12：每轮 prompt 之后轮询到期 cron 并在空闲时交付（至少一次语义）
+    await pumpCron();
   }
 
   rl.close();
-  console.log("再见");
+  await dispose();
+  console.log("再见（.memory/ 记忆已保留，重进 REPL 可继续验证跨会话召回）");
 }
 
 await main();

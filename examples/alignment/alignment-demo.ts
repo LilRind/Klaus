@@ -1,296 +1,34 @@
 /**
- * s01–s14 对齐演示（真实 LLM 手动验证入口，对应各章 README 的"试一下"）
+ * s01–s14 对齐批量演示（自动跑各章 README"试一下"的 prompt）
  *
  * 运行：npm run example:alignment（需要 .env 配置 LLM_API_KEY / LLM_MODEL_ID 等）
- * 分章：npm run example:alignment -- s04（s01…s09 任选，多章用逗号分隔）
+ * 分章：npm run example:alignment -- s04（s01…s14 任选，多章用逗号分隔）
+ * 交互式逐条验证：npm run example:alignment:repl（推荐人工验证用 REPL）
  *
  * ⚠️ 注意：
  * - bash 会真实执行 shell 命令、文件工具会真实写盘——建议在临时测试目录运行；
  * - 破坏性命令（del/rm）与越区路径会弹出 y/N 人工审批，拒绝是安全的；
- * - s02 的 prompt 提到 README.md / requirements.txt——在 learn-claude-code
- *   目录下运行可完全复刻；在别处运行时模型会收到"文件不存在"错误回喂，
- *   这本身也是错误 observation 路径的验证。
  * - 单个 Agent 实例跨 prompt 复用：工具轨迹跨轮保留（s01 会话语义）。
  */
 
-import "dotenv/config";
-import {
-  OpenAICompatLLM,
-  FunctionCallAgent,
-  ToolRegistry,
-  ReadFileTool,
-  WriteFileTool,
-  EditFileTool,
-  GlobTool,
-  BashTool,
-  AgentConfig,
-  AgentTraceLog,
-  ConsoleApprovalPrompt,
-  createStandardPermissionChecker,
-  HookRegistry,
-  logHook,
-  largeOutputHook,
-  contextInjectHook,
-  summaryHook,
-  TodoWriteTool,
-  createTaskTool,
-  SkillLoader,
-  SkillTool,
-  buildSkillSystemPrompt,
-  CompactTool,
-  ContextCompactor,
-  listMemoryFiles,
-  selectRelevantMemories,
-  loadMemories,
-  buildMemorySystem,
-  extractMemories,
-  consolidateMemories,
-  TaskStore,
-  createTaskTools,
-  TaskWorktreeManager,
-  TaskBoard,
-  TeamManager,
-  createTeamTools,
-  BackgroundManager,
-  CronScheduler,
-  ScheduledTurnRunner,
-  ScheduleCronTool,
-  ListCronsTool,
-  CancelCronTool,
-  McpConnectionManager,
-  ConnectMcpTool,
-  createMcpPermissionChecker,
-  createStandardPermissionRules,
-} from "../../src/index";
-import path from "node:path";
-import { Message } from "../../src/core/message";
+import { ALIGNMENT_PROMPTS, buildAlignmentAgent } from "./agent-assembly";
 
 const workspace = process.cwd();
-const llm = new OpenAICompatLLM();
-const traceLog = new AgentTraceLog("alignment-agent");
-
-// s04 对齐：四挂点示例 hook（权限闸门仍在 registry 汇合点，hooks 是扩展层）
-const hooks = new HookRegistry()
-  .register("UserPromptSubmit", contextInjectHook)
-  .register("PreToolUse", logHook)
-  .register("PostToolUse", largeOutputHook)
-  .register("Stop", summaryHook);
-
-// 演示装配（决策 5 + s14）：标准规则之上叠加 MCP 宿主策略
-//（未配置的外部工具默认 confirm；server 自述 readOnly 不作为授权）
-const mcpManager = new McpConnectionManager();
-const standardRules = createStandardPermissionRules({ workspaceRoot: workspace });
-const approvalPrompt = new ConsoleApprovalPrompt();
-const permissionChecker = createMcpPermissionChecker({
-  manager: mcpManager,
-  base: {
-    denyRules: standardRules.denyRules,
-    askRules: standardRules.askRules,
-    prompt: approvalPrompt,
-  },
-  prompt: approvalPrompt,
-});
-
-// s07：启动时扫描技能目录（目录进 system prompt，全文走 load_skill）
-const skillLoader = await new SkillLoader(path.join(workspace, "skills")).scan();
-const skillTool = new SkillTool(skillLoader);
-
-// s08：上下文压缩器（.transcripts/ 归档 + .task_outputs/tool-results/ 转存）
-const compactor = new ContextCompactor(llm, {
-  transcriptDir: path.join(workspace, ".transcripts"),
-  toolResultsDir: path.join(workspace, ".task_outputs", "tool-results"),
-});
-
-// s09：持久记忆目录（.memory/*.md + MEMORY.md 索引）
-const memoryDir = path.join(workspace, ".memory");
-
-// s10：任务系统（.tasks/*.json 持久任务图，两阶段建图：先建节点再补边）
-const taskStore = new TaskStore({
-  directory: path.join(workspace, ".tasks"),
-  workspaceRoot: workspace,
-});
-
-// s13：任务板强化 + worktree + teammate 协作（.mailboxes/ 保存团队事件）
-const worktreeManager = new TaskWorktreeManager({
-  workspaceRoot: workspace,
-  taskStore,
-});
-const taskBoard = new TaskBoard({ store: taskStore, worktrees: worktreeManager });
-const teamManager = new TeamManager({
-  llm,
-  board: taskBoard,
-  workspaceRoot: workspace,
-  permissionChecker,
-});
-
-// s11：后台任务管理器（run_in_background=true 的 bash 命令后台执行）
-const background = new BackgroundManager({ cwd: workspace });
-
-// s12：cron 调度器（durable 任务落 .scheduled_tasks.json；到期先入队、空闲交付）
-const cronScheduler = new CronScheduler({
-  statePath: path.join(workspace, ".scheduled_tasks.json"),
-});
-const cronLoadResult = await cronScheduler.loadDurableJobs();
-if (cronLoadResult.errors.length > 0) {
-  console.warn(`[cron] 恢复告警: ${cronLoadResult.errors.join("; ")}`);
-}
-
-// 基础工具集（s06 子 agent 共享同一批工具实例 + 权限 + hooks）
-const baseTools = [
-  new ReadFileTool({ workspace, allowOutsideWorkspace: true }),
-  new WriteFileTool({ workspace, allowOutsideWorkspace: true }),
-  new EditFileTool({ workspace, allowOutsideWorkspace: true }),
-  new GlobTool({ workspace, allowOutsideWorkspace: true }),
-  new BashTool({ cwd: workspace, backgroundManager: background }),
-  new TodoWriteTool(), // s05：计划工具（只更新状态，不执行工作）
-  skillTool,
-  new CompactTool(), // s08：模型主动请求压缩
-];
-
-// s06：task 工具——子工具集 = baseTools（自动剔除 task，单层委派）
-const taskTool = createTaskTool({ llm, tools: baseTools, permissionChecker, hooks });
-
-const registry = new ToolRegistry();
-const builtinToolNames: string[] = [];
-for (const tool of baseTools) {
-  registry.register(tool);
-  builtinToolNames.push(tool.name);
-}
-for (const tool of createTaskTools(taskStore)) {
-  registry.register(tool);
-  builtinToolNames.push(tool.name);
-}
-for (const tool of createTeamTools(teamManager)) {
-  registry.register(tool);
-  builtinToolNames.push(tool.name);
-}
-registry
-  .register(new ScheduleCronTool(cronScheduler))
-  .register(new ListCronsTool(cronScheduler))
-  .register(new CancelCronTool(cronScheduler))
-  .register(new ConnectMcpTool(mcpManager));
-builtinToolNames.push("schedule_cron", "list_crons", "cancel_cron", "connect_mcp");
-// s14：每轮组装动态工具池（连接 MCP server 后下一轮即可见新工具）
-registry.setDynamicToolProvider(() => mcpManager.assembleTools(builtinToolNames));
-registry
-  .register(taskTool)
-  .setPermissionChecker(permissionChecker)
-  .assertAllStructured(); // 对齐装配强制校验：全部工具结构化
-
-const baseInstructions =
-  `You are a coding agent at ${workspace}. Environment: Windows; the bash tool runs cmd.exe. ` +
-  "Use tools to solve tasks. Act, don't explain. " +
-  "For multi-step tasks, plan first with todo_write and keep it updated as you work. " +
-  "Delegate self-contained investigations to the task tool when a fresh context helps. " +
-  "You may call compact after finishing a phase to free context space. " +
-  "For multi-task work, create all task nodes first with create_task, then use " +
-  "update_task with the returned runtime IDs to add blockedBy dependencies. " +
-  "For parallel work, create task nodes, optionally bind worktrees, then spawn " +
-  "teammates and collect their results from team events. " +
-  "Do not ask for approval yourself; for risky operations still request the tool call — " +
-  "the harness will approve or deny before execution.";
-
-const agent = new FunctionCallAgent("alignment-agent", llm, registry, {
-  config: new AgentConfig({ verbose: true }),
-  traceLog,
-  hooks,
-  // s11/s13：后台命令通知 + teammate 团队事件都在下一次模型调用前注入
-  collectNotifications: async () => [
-    ...background.collect(),
-    ...(await teamManager.collectLeadEvents()),
-  ],
-  contextCompactor: compactor,
-  // s09：每次运行前召回相关记忆注入 system（背景知识，非新指令）
-  systemPromptBuilder: async (input: string) => {
-    const records = await listMemoryFiles(memoryDir);
-    const selected = await selectRelevantMemories(
-      llm,
-      [Message.user(input)],
-      records,
-    );
-    return buildMemorySystem(
-      buildSkillSystemPrompt(baseInstructions, skillLoader),
-      loadMemories(selected),
-    );
-  },
-  // s09：回合自然结束后提取持久记忆（达 10 条自动整理）
-  onRunCompleted: async ({ history }) => {
-    const written = await extractMemories(llm, history, memoryDir);
-    if (written > 0) {
-      console.log(`[memory] 新增 ${written} 条持久记忆（.memory/）`);
-      await consolidateMemories(llm, { memoryDir }).catch((error) => {
-        console.warn(`[memory] 整理失败（不影响答案）: ${error}`);
-      });
-    }
-  },
-});
-
-// s12：到期任务空闲交付（[Scheduled] prompt 触发一轮；异步回合拒绝交互确认）
-const scheduledRunner = new ScheduledTurnRunner({
-  scheduler: cronScheduler,
-  runTurn: async (prompt) => {
-    console.log(`\n⏰ [cron] 交付定时任务: ${prompt}`);
-    await agent.run(`[Scheduled] ${prompt}`);
-  },
-});
-
-const prompts: [string, string][] = [
-  ["s01", 'Create a file called hello.py that prints "Hello, World!"'],
-  ["s01", "List all Python files in this directory"],
-  ["s01", "What is the current git branch?"],
-  ["s02", "Read the file README.md and tell me what this project is about"],
-  ["s02", 'Create a file called test.py that prints "hello", then read it back'],
-  ["s02", "Find all Python files in this directory"],
-  ["s02", "Read both README.md and requirements.txt, then create a summary file"],
-  ["s03", "Create a file called test.txt in the current directory"],
-  ["s03", "Delete the file test.txt"],
-  ["s03", "What files are in the current directory?"],
-  ["s03", "Try to write a file to /etc/something"],
-  ["s04", "Read the file README.md（观察 [HOOK] 日志）"],
-  ["s04", "Create a file called test.txt（观察 PostToolUse hook）"],
-  ["s04", "Delete all temporary files in /tmp（bash + rm 触发权限闸门）"],
-  ["s05", "Refactor hello.py: add type hints, docstrings, and a main guard（先列 3 步再执行）"],
-  ["s05", "Create a Python package under demo_pkg with __init__.py, utils.py, and tests/test_utils.py"],
-  ["s05", "Review Python files in this directory and fix any style issues"],
-  ["s06", "Use a subtask to find what testing framework this project uses"],
-  ["s06", "Delegate: read all .ts files in src/agents and summarize what each one does"],
-  ["s06", "Use a task to create string_utils.ts with a slugify(text) function, then verify it from the parent agent"],
-  ["s07", "What skills are available?"],
-  ["s07", "Load the code-review skill and follow its instructions"],
-  ["s07", "Review README.md and load the relevant skill first"],
-  ["s08", "Read README.md, package.json, tsconfig.json, vitest.config.ts and SUMMARY.md, then summarize what each file is for（较早结果引用化）"],
-  ["s08", "Run `dir /s /b` from the workspace root and summarize what you see（大输出观察 .task_outputs/ 转存）"],
-  ["s08", "Compare src/context/compactor.ts and src/persistent-memory/store.ts: how do they manage session context vs cross-session memory?（可触发 auto compact）"],
-  ["s09", "I prefer using tabs for indentation. Remember that."],
-  ["s09", "What indentation style do I prefer?（重启进程后问同样问题可验证跨会话召回）"],
-  ["s09", "I also prefer concise commit messages. Remember that.（观察相关性选择：与缩进无关）"],
-  ["s09", "Do not create files in this session.（临时要求不应入库）"],
-  ["s10", "Create tasks: setup database schema, create API endpoints (depends on schema), write tests (depends on endpoints), write docs (depends on schema)（观察 .tasks/ 生成 JSON）"],
-  ["s10", "List all tasks and their statuses"],
-  ["s10", "Claim the first unblocked task and complete it"],
-  ["s10", "List tasks again — which ones are now unblocked?（观察依赖解锁）"],
-  ["s11", "Run `node -e \"console.log('bg-ok')\"` in the background (use run_in_background), and read package.json while waiting（观察占位 bg_id）"],
-  ["s11", "List all Markdown files, then tell me the background result when it arrives（观察 <task_notification> 注入）"],
-  ["s11", "Run a 3-second background sleep (`node -e \"setTimeout(()=>console.log('slept'),3000)\"`), then continue with other work and collect the result later"],
-  ["s12", "Schedule 'run date' every 2 minutes and keep it after restart.（观察 .scheduled_tasks.json）"],
-  ["s12", "List all cron jobs."],
-  ["s12", "Cancel the cron job you just created."],
-  ["s13", "Create two independent tasks: inspect README and inspect package.json. Spawn two teammates to claim and complete them, then summarize team events."],
-  ["s13", "Create a pending task called worktree-demo, bind a worktree named demo-wt, and show the task JSON."],
-  ["s13", "Spawn a teammate named reviewer with a required plan. Ask it to plan a small README summary, review the submitted plan, and approve it."],
-  ["s14", "Connect the docs server, search for agent hooks, and tell me the current documentation API version.（观察 mcp__docs__ 工具出现）"],
-  ["s14", "Connect the deploy server, check the web service status, and do NOT trigger a deployment.（status 放行 / trigger 需确认）"],
-];
+const { agent, pumpCron, dispose } = await buildAlignmentAgent({ workspace });
 
 const stages = (process.argv[2] ?? "all")
   .split(",")
   .map((s) => s.trim().toLowerCase())
   .filter((s) => s !== "all");
 const selected = stages.length
-  ? prompts.filter(([chapter]) => stages.includes(chapter))
-  : prompts;
+  ? ALIGNMENT_PROMPTS.filter(([chapter]) => stages.includes(chapter))
+  : ALIGNMENT_PROMPTS;
 
-console.log(`s01–s14 对齐演示（工作区: ${workspace}，章节: ${stages.length ? stages.join(", ") : "全部"}）`);
+console.log(
+  `s01–s14 对齐批量演示（工作区: ${workspace}，章节: ${stages.length ? stages.join(", ") : "全部"}）`,
+);
+console.log("人工逐条验证请用: npm run example:alignment:repl\n");
+
 for (const [chapter, prompt] of selected) {
   console.log(`\n========== [${chapter}] ${prompt} ==========`);
   try {
@@ -299,14 +37,7 @@ for (const [chapter, prompt] of selected) {
   } catch (error) {
     console.log(`执行失败: ${error instanceof Error ? error.message : String(error)}`);
   }
-  // s12：每个 prompt 之间轮询到期任务并在空闲时交付（至少一次语义）
-  await cronScheduler.pollDueJobs().catch((error) => {
-    console.warn(`[cron] 轮询失败: ${error}`);
-  });
-  await scheduledRunner.deliverDue().catch((error) => {
-    console.warn(`[cron] 交付失败（任务已重入队）: ${error}`);
-  });
+  await pumpCron();
 }
 
-// 收尾：尽力清理后台进程树；durable cron 任务保留（重启后恢复）
-await background.dispose();
+await dispose();
