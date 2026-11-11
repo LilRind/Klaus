@@ -103,6 +103,10 @@ async function main(): Promise<void> {
   let closed = false;
   let wake: (() => void) | null = null;
   rl.on("line", (line) => {
+    // 抑制 line 事件后的提示符自动重绘：运行期间不显示 "alignment >>"，
+    // 避免与 agent 长任务输出交错（s06/s07 人工验收日志中两次出现的现象）；
+    // 下一次 readLine 等待输入时会重新设置真实提示符
+    rl.setPrompt("");
     pending.push(line);
     wake?.();
     wake = null;
