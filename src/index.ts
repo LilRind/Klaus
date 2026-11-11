@@ -30,6 +30,8 @@ export * from "./scheduler/cron-scheduler";
 export * from "./tools/builtin/cron-tools";
 export * from "./mcp/mcp";
 export * from "./tools/builtin/connect-mcp-tool";
+export * from "./harness/llm-recovery";
+export * from "./harness/async-event-loop";
 export * from "./skills/skill-loader";
 export * from "./tools/builtin/skill-tool";
 export * from "./tools/builtin/calculator";

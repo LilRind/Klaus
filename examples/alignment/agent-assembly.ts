@@ -62,13 +62,17 @@ import {
   CancelCronTool,
   McpConnectionManager,
   ConnectMcpTool,
+  LlmRecovery,
+  HarnessLoop,
+  AsyncEventLoop,
   type ApprovalPrompt,
   type ChatLLM,
   type Tool,
+  type ScheduledPromptJob,
 } from "../../src/index";
 import { Message } from "../../src/core/message";
 
-export const MAX_ALIGNMENT_STAGE = 14;
+export const MAX_ALIGNMENT_STAGE = 15;
 
 export interface AlignmentAssemblyOptions {
   /** 工作区根目录（工具围栏放开，越区裁决权交给权限层） */
@@ -96,6 +100,7 @@ export interface AlignmentAssemblyFeatures {
   cron: boolean; // s12+
   teams: boolean; // s13+
   mcp: boolean; // s14+
+  integratedHarness: boolean; // s15+
 }
 
 export interface AlignmentAssembly {
@@ -109,6 +114,14 @@ export interface AlignmentAssembly {
   features: AlignmentAssemblyFeatures;
   /** 每轮 prompt 之间调用：轮询到期 cron + 空闲交付（<s12 时 no-op） */
   pumpCron: () => Promise<void>;
+  /** s15：用户轮/事件轮的互斥入口（异步轮权限切换）；<s15 时 undefined */
+  harnessLoop?: HarnessLoop;
+  /** s15：自动唤醒轮询循环（start/stop 生命周期）；<s15 时 undefined */
+  asyncEventLoop?: AsyncEventLoop;
+  /** s14+：MCP 连接管理器（测试观测点） */
+  mcp?: McpConnectionManager;
+  /** s09+：system prompt 构建器（测试观测点） */
+  buildSystemPrompt?: (input: string) => Promise<string>;
   /** 收尾：清理后台进程树（<s11 时 no-op；durable cron 保留） */
   dispose: () => Promise<void>;
 }
@@ -127,9 +140,10 @@ export function parseAlignmentStage(stage?: string): number {
     const match = /^s(\d{1,2})$|^(\d{1,2})$/.exec(token);
     const value = match ? Number(match[1] ?? match[2]) : Number.NaN;
     if (!Number.isInteger(value) || value < 1 || value > MAX_ALIGNMENT_STAGE) {
-      throw new Error(
-        `非法装配层级: '${token}'（用法: --stage s05 或 s04,s05 或 5；范围 s01–s14，缺省 all）`,
-      );
+    const maxName = `s${String(MAX_ALIGNMENT_STAGE).padStart(2, "0")}`;
+    throw new Error(
+      `非法装配层级: '${token}'（用法: --stage s05 或 s04,s05 或 5；范围 s01–${maxName}，缺省 all）`,
+    );
     }
     levels.push(value);
   }
@@ -228,6 +242,19 @@ export async function buildAlignmentAgent(
       prompt: approvalPrompt,
     });
   }
+  // ---------- s15：异步轮权限视图 + LLM 错误恢复 ----------
+  // 在 MCP 宿主策略包好之后取异步视图——deny/ask 规则集与前台完全一致，
+  // 仅 ask 命中的行为从"询问"变为"直接拒绝"（异步轮不与主 CLI 争抢输入）
+  const asyncChecker = has(15) ? permissionChecker.forAsyncTurns() : undefined;
+  const fallbackModelId = (process.env.FALLBACK_MODEL_ID ?? "").trim();
+  const recovery = has(15)
+    ? new LlmRecovery({
+        primary: llm,
+        ...(fallbackModelId
+          ? { fallback: new OpenAICompatLLM({ model: fallbackModelId }) }
+          : {}),
+      })
+    : undefined;
 
   // ---------- 工具集 ----------
   const baseTools: Tool[] = [
@@ -357,6 +384,23 @@ export async function buildAlignmentAgent(
     ? buildSkillSystemPrompt(baseInstructions, skillLoader)
     : baseInstructions;
 
+  // s09+：system prompt 构建器（agent 选项与装配观测点共用同一事实）
+  const systemPromptBuilder = has(9)
+    ? async (input: string): Promise<string> => {
+        const records = await listMemoryFiles(memoryDir);
+        const selected = await selectRelevantMemories(llm, [Message.user(input)], records);
+        const withSkills = skillLoader
+          ? buildSkillSystemPrompt(baseInstructions, skillLoader)
+          : baseInstructions;
+        // s15 对齐 lcc assemble_system_prompt：system 注入已连接 MCP 名单
+        const mcpSection =
+          has(15) && mcpManager && mcpManager.connectedNames().length > 0
+            ? `\n\nConnected MCP servers: ${mcpManager.connectedNames().join(", ")}`
+            : "";
+        return buildMemorySystem(withSkills, loadMemories(selected)) + mcpSection;
+      }
+    : undefined;
+
   // ---------- agent ----------
   const agent = new FunctionCallAgent("alignment-agent", llm, registry, {
     config: new AgentConfig({ verbose: true }),
@@ -373,17 +417,23 @@ export async function buildAlignmentAgent(
         }
       : {}),
     ...(compactor ? { contextCompactor: compactor } : {}),
+    // s15：轮级 cron 注入（drain → [Scheduled] user 消息 → 成功 ack / 失败 restore）
+    ...(has(15) && cronScheduler
+      ? {
+          collectScheduledPrompts: async (): Promise<ScheduledPromptJob[]> =>
+            cronScheduler.consumeQueue().map((job) => ({
+              prompt: job.prompt,
+              acknowledge: () => cronScheduler.acknowledge([job]),
+              restore: () => cronScheduler.restore([job]),
+            })),
+        }
+      : {}),
+    // s15：429/529 退避 + fallback 切换 + 截断升级/续跑
+    ...(recovery ? { llmRecovery: recovery } : {}),
     // s09：每轮召回注入 system；回合自然结束后提取持久记忆（达 10 条整理）
     ...(has(9)
       ? {
-          systemPromptBuilder: async (input: string) => {
-            const records = await listMemoryFiles(memoryDir);
-            const selected = await selectRelevantMemories(llm, [Message.user(input)], records);
-            const withSkills = skillLoader
-              ? buildSkillSystemPrompt(baseInstructions, skillLoader)
-              : baseInstructions;
-            return buildMemorySystem(withSkills, loadMemories(selected));
-          },
+          ...(systemPromptBuilder ? { systemPromptBuilder } : {}),
           onRunCompleted: async ({ history }) => {
             const written = await extractMemories(llm, history, memoryDir);
             if (written > 0) {
@@ -397,9 +447,10 @@ export async function buildAlignmentAgent(
       : {}),
   });
 
-  // ---------- s12：到期任务空闲交付（[Scheduled] prompt 触发一轮） ----------
+  // ---------- s12–s14：到期任务空闲交付（[Scheduled] prompt 触发一轮）；
+  // s15 起交付移交 AsyncEventLoop（轮级注入 + 异步权限 + 无合成 prompt） ----------
   const scheduledRunner =
-    cronScheduler
+    cronScheduler && level < 15
       ? new ScheduledTurnRunner({
           scheduler: cronScheduler,
           runTurn: async (prompt: string) => {
@@ -408,6 +459,43 @@ export async function buildAlignmentAgent(
           },
         })
       : undefined;
+
+  // ---------- s15：轮次串行化 + 自动唤醒（lcc agent_lock / async_event_loop） ----------
+  const harnessLoop = has(15)
+    ? new HarnessLoop({
+        agent,
+        registry,
+        asyncChecker,
+        foregroundChecker: permissionChecker,
+      })
+    : undefined;
+  const asyncEventLoop = harnessLoop
+    ? new AsyncEventLoop({
+        loop: harnessLoop,
+        ...(cronScheduler
+          ? {
+              cron: {
+                poll: () => cronScheduler.pollDueJobs(),
+                hasDue: () => cronScheduler.hasQueue(),
+              },
+            }
+          : {}),
+        ...(teamManager
+          ? { team: { collect: () => teamManager.collectLeadEvents() } }
+          : {}),
+        ...(background
+          ? {
+              background: {
+                hasCompleted: () => background.hasCompleted(),
+                collect: () => background.collect(),
+              },
+            }
+          : {}),
+        onWake: (source, detail) => {
+          console.log(`\n🔔 [auto-wake:${source}] ${detail}`);
+        },
+      })
+    : undefined;
 
   const toolNames = registry.listTools().map((tool) => tool.name);
   return {
@@ -427,17 +515,26 @@ export async function buildAlignmentAgent(
       cron: has(12),
       teams: has(13),
       mcp: has(14),
+      integratedHarness: has(15),
     },
     pumpCron: async () => {
-      if (!cronScheduler || !scheduledRunner) return;
+      if (!cronScheduler) return;
       await cronScheduler.pollDueJobs().catch((error) => {
         console.warn(`[cron] 轮询失败: ${error}`);
       });
+      // s15 起空闲交付由 AsyncEventLoop 驱动（runEventTurn 轮内 drain）；
+      // <s15 保持 turn 级逐任务交付
+      if (!scheduledRunner) return;
       await scheduledRunner.deliverDue().catch((error) => {
         console.warn(`[cron] 交付失败（任务已重入队）: ${error}`);
       });
     },
+    ...(harnessLoop ? { harnessLoop } : {}),
+    ...(asyncEventLoop ? { asyncEventLoop } : {}),
+    ...(mcpManager ? { mcp: mcpManager } : {}),
+    ...(systemPromptBuilder ? { buildSystemPrompt: systemPromptBuilder } : {}),
     dispose: async () => {
+      asyncEventLoop?.stop();
       await background?.dispose();
     },
   };
@@ -490,4 +587,7 @@ export const ALIGNMENT_PROMPTS: [string, string][] = [
   ["s13", "Spawn a teammate named reviewer with a required plan. Ask it to plan a small README summary, review the submitted plan, and approve it."],
   ["s14", "Connect the docs server, search for agent hooks, and tell me the current documentation API version.（观察 mcp__docs__ 工具出现）"],
   ["s14", "Connect the deploy server, check the web service status, and do NOT trigger a deployment.（status 放行 / trigger 需确认）"],
+  ["s15", "Schedule a one-off task 2 minutes from now that runs `node -e \"console.log('cron-ok')\"`（REPL 空闲时观察自动唤醒交付与 [Scheduled] 注入）"],
+  ["s15", "Run a 2-second background task (use run_in_background), then stay idle and wait（REPL 空闲时观察后台完成自动唤醒与 <task_notification> 注入）"],
+  ["s15", "Spawn a teammate and send it a message asking for a short README summary（观察团队事件自动唤醒一轮）"],
 ];

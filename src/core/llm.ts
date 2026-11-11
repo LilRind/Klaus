@@ -60,6 +60,13 @@ export interface ToolSchema {
 export interface ToolInvocationResult {
   content: string | null;
   toolCalls: ToolCallRequest[];
+  /**
+   * 原始停止原因透传（s15 对齐）：OpenAI 兼容层为 choices[0].finish_reason
+   * （截断 = "length"），Anthropic 口径为 "max_tokens"。s15 错误恢复层据此
+   * 识别响应截断并升级 max_tokens / 注入续跑提示。可选字段——存量实现与
+   * 测试桩不提供时行为完全不变。
+   */
+  finishReason?: string;
 }
 
 interface ProviderDefaults {
@@ -284,6 +291,7 @@ export class OpenAICompatLLM implements ChatLLM {
       const message = response.choices[0]?.message;
       return {
         content: message?.content ?? null,
+        finishReason: response.choices[0]?.finish_reason ?? undefined,
         toolCalls: (message?.tool_calls ?? []).map((call) => ({
           id: call.id,
           type: "function" as const,

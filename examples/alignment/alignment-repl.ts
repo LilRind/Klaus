@@ -1,5 +1,5 @@
 /**
- * s01–s14 对齐交互式会话（单会话多轮聊天，Claude Code 式体验）
+ * s01–s15 对齐交互式会话（单会话多轮聊天，Claude Code 式体验）
  *
  * 运行：npm run example:alignment:repl（需要 .env 配置真实 LLM）
  * 按章装配：npm run example:alignment:repl -- --stage s05
@@ -13,7 +13,7 @@
  *   - 输入 prompt 回车发送；同一会话内工具轨迹跨轮保留（s01 会话语义），
  *     模型看得到"之前跑过什么命令、看到什么输出"——这就是多轮聊天的底座；
  *   - help        列出全部章节的参考 prompt
- *   - help s05    只看某一章（s01…s14）
+ *   - help s05    只看某一章（s01…s15）
  *   - q / exit    退出（Ctrl+C 也可）
  *   - del/rm 等破坏性命令、越区路径会弹 y/N 人工审批（拒绝安全）
  *   - 装配与批量演示完全同源（agent-assembly.ts）：hooks/todo/task/
@@ -83,7 +83,7 @@ function printHelp(chapter: string | undefined, stageLevel: number): void {
     }
   }
   if (visible.length === 0) {
-    console.log(`\n没有 [${filter}] 章节；可用: s01 … s14`);
+    console.log(`\n没有 [${filter}] 章节；可用: s01 … s${String(stageLevel).padStart(2, "0")}`);
     return;
   }
   console.log(
@@ -127,7 +127,18 @@ async function main(): Promise<void> {
   };
 
   const args = parseArgs(process.argv);
-  const { agent, workspace, memoryDir, stage, toolNames, features, pumpCron, dispose } =
+  const {
+    agent,
+    workspace,
+    memoryDir,
+    stage,
+    toolNames,
+    features,
+    pumpCron,
+    harnessLoop,
+    asyncEventLoop,
+    dispose,
+  } =
     await buildAlignmentAgent({
       workspace: args.workspace ?? process.cwd(),
       stage: args.stage,
@@ -137,7 +148,7 @@ async function main(): Promise<void> {
   const stageName = `s${String(stage).padStart(2, "0")}`;
   console.log(`对齐交互式会话（工作区: ${workspace}）`);
   console.log(
-    `装配层级: ${stageName}${stage >= 14 ? "（s01–s14 全量）" : `（s01–${stageName} 机制）`}`,
+    `装配层级: ${stageName}${stage >= 15 ? "（s01–s15 全量）" : `（s01–${stageName} 机制）`}`,
   );
   console.log(`工具(${toolNames.length}): ${toolNames.join(", ")}`);
   if (features.memory) {
@@ -145,7 +156,13 @@ async function main(): Promise<void> {
       `持久记忆目录: ${memoryDir}（退出重进，记忆仍在——s09 跨会话验证入口）`,
     );
   }
-  console.log("输入 prompt 回车发送 | help [s01…s14] 查看参考 prompt | q 退出\n");
+  console.log("输入 prompt 回车发送 | help [s01…s15] 查看参考 prompt | q 退出\n");
+
+  // s15：启动自动唤醒轮询（cron/团队事件/后台完成 → 空闲自动跑一轮）
+  asyncEventLoop?.start();
+  if (asyncEventLoop) {
+    console.log("自动唤醒已启动：空闲时 cron 到期 / 团队事件 / 后台完成会自动触发 agent 轮\n");
+  }
 
   while (true) {
     const raw = await readLine("alignment >> ");
@@ -158,7 +175,10 @@ async function main(): Promise<void> {
       continue;
     }
     try {
-      const answer = await agent.run(query);
+      // s15：用户轮走 HarnessLoop 互斥入口（与自动唤醒事件轮串行化）
+      const answer = harnessLoop
+        ? await harnessLoop.runUserTurn(query)
+        : await agent.run(query);
       console.log(`\n回答: ${answer}\n`);
     } catch (error) {
       console.log(
@@ -170,6 +190,7 @@ async function main(): Promise<void> {
   }
 
   rl.close();
+  asyncEventLoop?.stop();
   await dispose();
   console.log(
     features.memory

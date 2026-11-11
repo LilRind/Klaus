@@ -233,6 +233,11 @@ export class McpConnectionManager {
     return Object.keys(this.servers);
   }
 
+  /** 已连接的 server 名单（s15 system prompt 的 Connected MCP servers 段用） */
+  connectedNames(): string[] {
+    return [...this.clients.keys()];
+  }
+
   /** 连接并发现工具（对齐 lcc connect_mcp 文案） */
   connect(name: string): string {
     if (this.clients.has(name)) {

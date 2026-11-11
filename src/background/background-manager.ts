@@ -236,6 +236,15 @@ export class BackgroundManager {
     return notifications;
   }
 
+  /**
+   * 非破坏 peek：是否有已完成、未投递的结果（s15 自动唤醒 tick 判定用）。
+   * 与 collect() 消费同一 ready 队列，但不出队——唤醒轮内仍由既有
+   * 通知管线破坏性收集，恰好各消费一次。
+   */
+  hasCompleted(): boolean {
+    return this.ready.length > 0;
+  }
+
   /** 尽力清理：终止仍在运行的进程树并停止后续登记（生命周期清理，非沙箱） */
   async dispose(): Promise<void> {
     this.disposed = true;

@@ -63,6 +63,11 @@ export class ScriptedLLM implements ChatLLM {
     return this.calls.length;
   }
 
+  /** 追加预设工具响应（测试中途续写队列用） */
+  pushToolResponse(response: ToolInvocationResult): void {
+    this.toolResponses.push(response);
+  }
+
   lastMessages(): ChatMessage[] {
     return this.calls[this.calls.length - 1]?.messages ?? [];
   }

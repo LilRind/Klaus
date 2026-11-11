@@ -24,6 +24,13 @@ import {
   MAX_REACTIVE_RETRIES,
 } from "../context/compactor";
 import { COMPACT_TOOL_NAME } from "../tools/builtin/compact-tool";
+import {
+  CONTINUATION_PROMPT,
+  ESCALATED_MAX_TOKENS,
+  LlmRecovery,
+  MAX_RECOVERY_RETRIES,
+} from "../harness/llm-recovery";
+import type { ScheduledPromptJob } from "../harness/async-event-loop";
 
 export interface FunctionCallAgentOptions {
   systemPrompt?: string;
@@ -69,6 +76,20 @@ export interface FunctionCallAgentOptions {
    * 不传时行为与之前完全一致（存量零回归）。
    */
   collectNotifications?: () => string[] | Promise<string[]>;
+  /**
+   * 每轮 LLM 调用前排空到期 cron（s15 轮级注入，对齐 lcc
+   * consume_cron_queue）：返回的任务逐条注入 `[Scheduled] {prompt}`
+   * user 消息；模型调用成功后 harness 调 acknowledge（至少一次语义），
+   * 最终失败由本 Agent 调 restore 重入队。不传时不注入（存量零回归）。
+   */
+  collectScheduledPrompts?:
+    | (() => ScheduledPromptJob[] | Promise<ScheduledPromptJob[]>);
+  /**
+   * s15 错误恢复：429/529 指数退避 + fallback 切换 + 截断升级/续跑
+   * （对齐 lcc RecoveryState/with_retry）。不传时仅保留既有
+   * reactive compact 路径（存量零回归）。
+   */
+  llmRecovery?: LlmRecovery;
 }
 
 export class FunctionCallAgent extends Agent {
@@ -91,6 +112,10 @@ export class FunctionCallAgent extends Agent {
   private readonly collectNotifications:
     | (() => string[] | Promise<string[]>)
     | undefined;
+  private readonly collectScheduledPrompts:
+    | (() => ScheduledPromptJob[] | Promise<ScheduledPromptJob[]>)
+    | undefined;
+  private readonly llmRecovery: LlmRecovery | undefined;
   /** systemPromptBuilder 产出的本轮 system（run 期间生效） */
   private activeSystemPrompt: string | undefined;
   /** s05：连续未使用 todo_write 的工具轮数（reminder 计数器） */
@@ -117,28 +142,78 @@ export class FunctionCallAgent extends Agent {
     this.systemPromptBuilder = options.systemPromptBuilder;
     this.onRunCompleted = options.onRunCompleted;
     this.collectNotifications = options.collectNotifications;
+    this.collectScheduledPrompts = options.collectScheduledPrompts;
+    this.llmRecovery = options.llmRecovery;
   }
 
   override async run(input: string): Promise<string> {
-    const startedAt = Date.now();
     // s04 对齐：用户输入提交后、进入 LLM 前触发（通知型，不参与控制流）
     this.hooks.triggerUserPromptSubmit(input);
+    return this.startTurn(input, { addUserMessage: true });
+  }
+
+  /**
+   * s15 对齐：无固定用户输入的事件轮（cron 空闲交付 / 自动唤醒）——
+   * 不触发 UserPromptSubmit hook、不强制添加用户消息；可选 input 为
+   * 事件文本（团队事件 / 后台通知 join 后的整段文本，即本轮 user 消息，
+   * 对齐 lcc async_event_loop 的 history.append 形态，code.py:3288-3292）。
+   */
+  async runEventTurn(input?: string): Promise<string> {
+    return this.startTurn(input, { addUserMessage: input !== undefined });
+  }
+
+  /**
+   * 统一轮循环（对齐 lcc agent_loop，code.py:3139-3261）：run 与
+   * runEventTurn 的公共主体。每轮顺序：cron drain 注入 → 异步通知 →
+   * 压缩 → 模型调用（恢复包装）→ 截断升级/续跑 → 工具执行 → reminder。
+   */
+  private async startTurn(
+    input: string | undefined,
+    options: { addUserMessage: boolean },
+  ): Promise<string> {
+    const startedAt = Date.now();
     // s09 对齐：每次运行前重建 system（注入本轮召回的持久记忆）
     if (this.systemPromptBuilder) {
-      this.activeSystemPrompt = await this.systemPromptBuilder(input);
+      this.activeSystemPrompt = await this.systemPromptBuilder(input ?? "");
     }
     // s01 对齐：输入先入 history，循环中的工具轨迹实时回写——
     // 下一次 run 的 conversation 自动携带上一轮的调用与结果，
     // 模型看得到之前"跑过什么命令、看到什么输出"（会话级全轨迹语义）
-    this.addMessage(Message.user(input));
-    await this.traceLog?.emit({ type: "run_start", input });
+    if (options.addUserMessage && input !== undefined) {
+      this.addMessage(Message.user(input));
+    }
+    await this.traceLog?.emit({
+      type: "run_start",
+      input: input ?? "(event turn)",
+    });
+    // s15 对齐 lcc agent_loop 顶部 `state = RecoveryState()`：每轮新建恢复状态
+    this.llmRecovery?.beginTurn();
     const conversation = this.buildConversation();
+    // s15 轮级 cron 注入的 active_request 累积（对齐 lcc 3155-3158，压缩摘要键）
+    const scheduledRequests: string[] = [];
+    /** 本轮已 drain、待 ack 的 cron 任务（模型成功后 ack，最终失败 restore） */
+    let pendingScheduled: ScheduledPromptJob[] = [];
 
     let response = "";
     for (let iteration = 0; iteration < this.maxToolIterations; iteration++) {
       // s14 对齐：每轮重新组装工具池——connect_mcp 等连接动作生效后，
       // 下一轮模型调用即可看到新工具（静态注册表场景零开销差异）
       const tools = this.buildToolSchemas();
+
+      // s15 轮级 cron 注入（对齐 lcc 3149-3158 consume_cron_queue）：每轮
+      // 顶部 drain 到期任务，逐条注入 [Scheduled] user 消息；模型调用成功后
+      // acknowledge（3184），最终失败 restore（3178）——至少一次语义
+      if (this.collectScheduledPrompts) {
+        const jobs = await this.collectScheduledPrompts();
+        for (const job of jobs) {
+          const scheduled = Message.user(`[Scheduled] ${job.prompt}`);
+          this.addMessage(scheduled);
+          conversation.push(scheduled.toChatMessage());
+          scheduledRequests.push(`Run scheduled task: ${job.prompt}`);
+          this.trace(`\n⏰ 注入定时任务: ${job.prompt.slice(0, 60)}`);
+        }
+        pendingScheduled = jobs;
+      }
 
       // s11 对齐：每次调用模型前收集已完成的异步结果（后台命令等），
       // 以 <task_notification> 独立 user 消息注入——工具调用已用占位结果
@@ -158,22 +233,73 @@ export class FunctionCallAgent extends Agent {
       // s08 对齐：每次调用模型前跑压缩管线（低成本优先，按需升级）；
       // s08 对齐：每次调用模型前跑压缩管线（低成本优先，按需升级）；
       // history 即工作数组——压缩结果原样写回，下一轮从压缩后的历史继续
+      // s15 对齐 lcc 3155-3158：cron 注入累积进 active_request（压缩摘要键）
+      const activeRequest =
+        [input ?? "", ...scheduledRequests].filter(Boolean).join("\n") ||
+        (input ?? "");
       if (this.contextCompactor) {
         const compacted = await this.contextCompactor.prepare(
           this.history,
-          input,
+          activeRequest,
         );
         this.replaceHistory(compacted);
         conversation.length = 0;
         conversation.push(...this.buildConversation());
       }
 
-      const result = await this.invokeWithToolsWithReactiveRetry(
-        conversation,
-        tools,
-        input,
-      );
+      let result;
+      try {
+        result = await this.invokeModel(conversation, tools, input ?? "");
+      } catch (error) {
+        // s15 对齐 lcc 3178-3182：最终失败 → restore 未 ack 的 cron，
+        // 追加 [Error] assistant 消息留痕，再抛给调用方
+        this.restorePendingScheduled(pendingScheduled);
+        const label =
+          error instanceof Error
+            ? `${error.name}: ${error.message}`
+            : String(error);
+        this.addMessage(new Message(`[Error] ${label}`, "assistant"));
+        throw error;
+      }
       if (!result) break;
+      // s15 对齐 lcc 3184：模型调用成功即 ack 本轮排空的 cron（截断也算成功）
+      await this.acknowledgePendingScheduled(pendingScheduled);
+      pendingScheduled = [];
+
+      // s15 对齐 lcc 3187-3199：finish_reason 截断 → 升级 max_tokens 一次，
+      // 再注入 CONTINUATION_PROMPT 续跑 ≤MAX_RECOVERY_RETRIES 次，仍不行则
+      // 优雅返回已产出的部分文本
+      if (this.llmRecovery && LlmRecovery.isTruncation(result)) {
+        if (!this.llmRecovery.hasEscalated) {
+          this.llmRecovery.markEscalated();
+          this.trace(
+            `\n⏫ max_tokens 截断：升级 maxTokens 至 ${ESCALATED_MAX_TOKENS} 重试`,
+          );
+          continue;
+        }
+        const assistantMessage = new Message(result.content ?? "", "assistant");
+        this.addMessage(assistantMessage);
+        conversation.push(assistantMessage.toChatMessage());
+        if (this.llmRecovery.recoveryCount < MAX_RECOVERY_RETRIES) {
+          this.llmRecovery.countRecovery();
+          const continuation = Message.user(CONTINUATION_PROMPT);
+          this.addMessage(continuation);
+          conversation.push(continuation.toChatMessage());
+          this.trace(
+            `\n↩ 截断续跑（第 ${this.llmRecovery.recoveryCount}/${MAX_RECOVERY_RETRIES} 次）`,
+          );
+          continue;
+        }
+        response = result.content ?? "";
+        this.trace("\n⏹ 截断续跑已达上限，返回已产出的部分文本");
+        await this.traceLog?.emit({
+          type: "run_end",
+          answer: response,
+          durationMs: Date.now() - startedAt,
+        });
+        return response;
+      }
+      this.llmRecovery?.resetEscalation();
 
       if (result.toolCalls.length === 0) {
         // 对齐 s04：assistant 最终响应先进轨迹，再触发 Stop——
@@ -204,7 +330,7 @@ export class FunctionCallAgent extends Agent {
           try {
             await this.onRunCompleted({
               history: this.history,
-              input,
+              input: input ?? "",
               answer: response,
             });
           } catch (error) {
@@ -309,7 +435,7 @@ export class FunctionCallAgent extends Agent {
       if (compactRequested && this.contextCompactor) {
         const compacted = await this.contextCompactor.compactHistory(
           this.history,
-          input,
+          activeRequest,
         );
         this.replaceHistory(compacted);
         conversation.length = 0;
@@ -383,7 +509,7 @@ export class FunctionCallAgent extends Agent {
    * 摘要较早历史并保留最近几条，重试至多 MAX_REACTIVE_RETRIES 次；
    * 无 compactor 或非超长错误原样抛出。
    */
-  private async invokeWithToolsWithReactiveRetry(
+  private async invokeModel(
     conversation: Parameters<NonNullable<ChatLLM["invokeWithTools"]>>[0],
     tools: ReturnType<FunctionCallAgent["buildToolSchemas"]>,
     activeRequest: string,
@@ -391,6 +517,12 @@ export class FunctionCallAgent extends Agent {
     let retries = 0;
     for (;;) {
       try {
+        if (this.llmRecovery) {
+          // s15 对齐 lcc call_llm 的 with_retry 包装（429/529 退避 + fallback 切换）
+          return await this.llmRecovery.invokeWithRetry((llm, invokeOptions) =>
+            llm.invokeWithTools!(conversation, tools, invokeOptions),
+          );
+        }
         return await this.llm.invokeWithTools?.(conversation, tools);
       } catch (error) {
         if (
@@ -411,6 +543,22 @@ export class FunctionCallAgent extends Agent {
         }
         throw error;
       }
+    }
+  }
+
+  /** s15 对齐 lcc 3184 acknowledge_cron_jobs：模型成功后逐个确认本轮排空任务 */
+  private async acknowledgePendingScheduled(
+    jobs: ScheduledPromptJob[],
+  ): Promise<void> {
+    for (const job of jobs) {
+      await job.acknowledge();
+    }
+  }
+
+  /** s15 对齐 lcc 3178 restore_cron_jobs：模型最终失败后重入队（至少一次） */
+  private restorePendingScheduled(jobs: ScheduledPromptJob[]): void {
+    for (const job of jobs) {
+      job.restore();
     }
   }
 

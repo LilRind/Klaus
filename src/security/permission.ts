@@ -55,17 +55,42 @@ export interface PermissionCheckerOptions {
   askRules?: PermissionRule[];
   /** 闸门 3：审批器；askRules 命中但未配置时安全默认拒绝 */
   prompt?: ApprovalPrompt;
+  /**
+   * s15 异步轮模式（对齐 lcc code.py:1807-1809/1823-1825）：命中 ask 规则
+   * 不再询问人工、直接拒绝（异步轮不能与主 CLI 争抢输入）。deny 规则与
+   * 放行语义不变。常规构造保持 false——仅 harness 的事件轮通过
+   * forAsyncTurns() 视图启用。
+   */
+  asyncTurnDeny?: boolean;
+}
+
+/** s15 异步轮 bash 拒绝文案（逐字对齐 lcc code.py:1808-1809） */
+export const ASYNC_TURN_SHELL_DENY =
+  "Permission denied: interactive shell approval is unavailable during an asynchronous turn";
+/** s15 异步轮 MCP 拒绝文案（逐字对齐 lcc code.py:1824-1825） */
+export const ASYNC_TURN_MCP_DENY =
+  "Permission denied: interactive MCP approval is unavailable during an asynchronous turn";
+/** 其余 ask 规则（如装包审批）的异步轮拒绝文案（翻译外推，同一句式） */
+export const ASYNC_TURN_GENERIC_DENY =
+  "Permission denied: interactive approval is unavailable during an asynchronous turn";
+
+function asyncTurnDenyReason(toolName: string): string {
+  if (toolName === "bash") return ASYNC_TURN_SHELL_DENY;
+  if (toolName.startsWith("mcp__")) return ASYNC_TURN_MCP_DENY;
+  return ASYNC_TURN_GENERIC_DENY;
 }
 
 export class PermissionChecker {
   private readonly denyRules: readonly PermissionRule[];
   private readonly askRules: readonly PermissionRule[];
   private readonly prompt: ApprovalPrompt | undefined;
+  private readonly asyncTurnDeny: boolean;
 
   constructor(options: PermissionCheckerOptions = {}) {
     this.denyRules = options.denyRules ?? [];
     this.askRules = options.askRules ?? [];
     this.prompt = options.prompt;
+    this.asyncTurnDeny = options.asyncTurnDeny ?? false;
   }
 
   async check(request: PermissionRequest): Promise<PermissionOutcome> {
@@ -78,6 +103,9 @@ export class PermissionChecker {
       if (!rule.tools.includes(request.toolName)) continue;
       const reason = rule.test(request);
       if (reason) {
+        if (this.asyncTurnDeny) {
+          return { allowed: false, reason: asyncTurnDenyReason(request.toolName) };
+        }
         if (!this.prompt) {
           return {
             allowed: false,
@@ -91,6 +119,19 @@ export class PermissionChecker {
       }
     }
     return { allowed: true };
+  }
+
+  /**
+   * s15 对齐：异步轮权限视图——共享同一套 deny/ask 规则，但 ask 命中
+   * 直接拒绝（不询问）。cron 交付 / 自动唤醒事件轮在 harness 中切换到
+   * 该视图执行，与 lcc "异步轮不与主 CLI 争抢输入" 语义等价。
+   */
+  forAsyncTurns(): PermissionChecker {
+    return new PermissionChecker({
+      denyRules: [...this.denyRules],
+      askRules: [...this.askRules],
+      asyncTurnDeny: true,
+    });
   }
 }
 
