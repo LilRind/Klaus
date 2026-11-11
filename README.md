@@ -92,9 +92,12 @@ hello-agents-ts/
 │   ├── scheduler/               # cron 五段解析 + durable 调度（s12）
 │   ├── teams/                   # 任务板 / teammate / 团队协议（s13）
 │   ├── mcp/                     # MCP 连接管理 + 动态工具池（s14）
+│   ├── harness/                 # 集成宿主：轮次串行化 + 自动唤醒 + LLM 错误恢复（s15）
+│   ├── workflow/                # Workflow 运行时：journal 断点续跑 + pipeline/parallel（s16）
+│   ├── goal/                    # Goal Loop：会话级目标 + 独立完成度判断器（s17）
 │   └── memory/                  # 第八章认知记忆 + RAG（types/storage/rag）
 ├── skills/                      # 技能目录（code-review / git-workflow / api-design）
-├── tests/                       # vitest 全离线（ScriptedLLM 桩，400+ 用例）
+├── tests/                       # vitest 全离线（ScriptedLLM 桩，500+ 用例）
 ├── examples/                    # 7|8|9/ 书章示例；alignment/ 对齐 REPL + 批量；s0X_*/ 各章人工验收样例
 └── vitest.config.ts
 ```
@@ -184,7 +187,11 @@ const answer = await agent.run("请帮我计算 (12+8)*3");
 - [x] learn-claude-code s04–s06 对齐（hooks 四挂点 / todo_write+reminder / task 子 agent）
 - [x] learn-claude-code s07–s09 对齐（skill 按需加载 / 四步上下文压缩 / 文件式持久记忆）
 - [x] learn-claude-code s10–s14 对齐（持久任务图 / 后台任务 / cron 调度 / 任务板与 teammate / MCP 动态工具池）
+- [x] learn-claude-code s15 对齐（轮级 cron 注入 / 异步轮权限 / 自动唤醒 / LLM 错误恢复）
+- [x] learn-claude-code s16–s17 对齐（Workflow 运行时 journal 续跑 / Goal Loop 独立判断器）
 
 > 对齐机制全部落在 FunctionCallAgent 主线（教学线冻结不动）；验证入口
 > `npm run example:alignment`（分章 `example:alignment:s04` … `:s14`；交互式逐条验证
 > `npm run example:alignment:repl -- --stage s07` 按教学章节累积装配）。
+> 分章入口现已覆盖 `example:alignment:s15` / `:s16` / `:s17`（REPL s17 起支持
+> `/goal <条件>` / `/goal` 查状态 / `/goal clear`）。
