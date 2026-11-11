@@ -78,14 +78,14 @@ LLM 依赖路径另有零 mock 真实模型验证脚本（`npm run verify:9-real
 ```
 hello-agents-ts/
 ├── src/
-│   ├── core/                    # 核心框架层（agent/llm/message/config/memory/exceptions/trace-log）
+│   ├── core/                    # 核心框架层（agent/llm/message/config/memory/exceptions/trace-log 含 compaction 事件）
 │   ├── agents/                  # 五种 Agent 范式（Simple/ReAct/Reflection/PlanSolve/FunctionCall）
 │   ├── tools/                   # 工具系统（registry + builtin：calculator/search/file/bash/todo/task/skill/compact/cron/team…）
 │   ├── security/                # 三道闸门权限管线（s03）
 │   ├── hooks/                   # 四挂点 Hook 注册表（s04）
 │   ├── todo/                    # TodoManager 计划状态（s05）
 │   ├── skills/                  # SkillLoader 技能目录扫描（s07）
-│   ├── context/                 # GSSC 上下文构建（书 9 章）+ ContextCompactor 四步压缩（s08）
+│   ├── context/                 # GSSC 上下文构建（书 9 章）+ ContextCompactor 四步压缩（s08，逐阶段可观测）
 │   ├── persistent-memory/       # 文件式持久记忆：store/recall/extract/consolidate（s09）
 │   ├── tasks/                   # 持久任务图 + worktree（s10/s13）
 │   ├── background/              # 后台任务管理器（s11）
@@ -175,6 +175,14 @@ const answer = await agent.run("请帮我计算 (12+8)*3");
 6. **思考型模型适配**：glm-5.3 等思考型模型写长文时会生成大量隐藏推理，
    非流式调用容易超时；`OpenAICompatLLM.extraBody` 可透传
    `thinking: {type:"disabled"}` 等厂商参数，`.env` 的 `LLM_TIMEOUT` 控制超时。
+7. **上下文压缩逐阶段可观测**：`ContextCompactor` 每执行一步（toolResultBudget /
+   activeRequestRestore / snipCompact / microCompact / fitToolResults /
+   compactHistory / reactiveCompact）都通过 `CompactionObserver` 上报
+   `CompactionOperation` 事件——压缩前后的消息数与字符估算、耗时、以及本次新增的
+   落盘产物（transcript / full output 文件）。观察者由 FunctionCallAgent 接到
+   `TraceLog`，md 转录里渲染为 `🗜 compaction · <阶段>` 段落，事后可直接从转录判断
+   每步压缩的触发强度与效果。字符数是 JSON 估算口径（与服务端 token 数不同），
+   因此 reactive 补救仍然不可省略——观测是取证，不是保险。
 
 ## 状态
 
