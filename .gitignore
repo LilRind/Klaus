@@ -34,15 +34,21 @@ verify9_notes/
 verify9_project_notes/
 
 # 对齐演示在项目根目录运行时的产物（建议用独立工作区运行）
-SUMMARY.md
-hello.py
-test.py
-test.txt
+/SUMMARY.md
+/hello.py
+/test.py
+/test.txt
 
 # s08 上下文压缩 / s09 持久记忆运行时产物
 .transcripts/
 .task_outputs/
 .memory/
+
+# s05 人工验收：测试日志含本地路径与对话记录（隐私，不入库）+ Python 工具缓存
+examples/s05/log/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
 
 # s10 任务系统 / s11 后台任务运行时产物
 .tasks/
