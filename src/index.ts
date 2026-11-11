@@ -7,6 +7,7 @@ export * from "./core/memory";
 export * from "./core/prompt";
 export * from "./core/trace-log";
 export * from "./tools/tool";
+export * from "./tools/shell-output";
 export * from "./tools/registry";
 export * from "./tools/builtin/file-tools";
 export * from "./tools/builtin/bash-tool";

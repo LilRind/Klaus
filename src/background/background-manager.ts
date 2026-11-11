@@ -16,6 +16,7 @@ import {
   spawnSync,
   type ChildProcess,
 } from "node:child_process";
+import { decodeShellOutput } from "../tools/shell-output";
 
 export interface BashProcessResult {
   output: string;
@@ -99,15 +100,17 @@ export async function runBashProcess(
 
     options.onProcess?.(child);
 
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     let settled = false;
     /** override 非 null 时直接采用（timeout / spawn error 的错误文案优先于部分输出） */
     const finish = (override: string | null, exitCode: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      const merged = `${stdout}${stderr}`.trim();
+    const merged = `${decodeShellOutput(Buffer.concat(stdoutChunks))}${decodeShellOutput(
+      Buffer.concat(stderrChunks),
+    )}`.trim();
       const text =
         override ?? (merged || "(no output)").slice(0, maxOutputChars);
       resolve({ output: text, exitCode });
@@ -119,10 +122,10 @@ export async function runBashProcess(
     }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+      stdoutChunks.push(chunk); // 原始字节累积：避免多字节字符被 chunk 边界截断
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+      stderrChunks.push(chunk);
     });
     child.on("error", (error) => {
       finish(`Error: ${error.constructor.name}: ${error.message}`, null);

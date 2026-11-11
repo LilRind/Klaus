@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { BashTool } from "../src/tools/builtin/bash-tool";
+import { decodeShellOutput } from "../src/tools/shell-output";
 import { ToolRegistry } from "../src/tools/registry";
 import {
   AutoAllowPrompt,
@@ -21,6 +22,19 @@ afterEach(async () => {
   await Promise.all(
     roots.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
+});
+
+describe("decodeShellOutput 编码降级（中文 Windows GBK 修复）", () => {
+  it("严格 UTF-8 优先：ASCII / 真 UTF-8 原样通过", () => {
+    expect(decodeShellOutput(Buffer.from("hello"))).toBe("hello");
+    expect(decodeShellOutput(Buffer.from([0xe4, 0xb8, 0xad, 0xe6, 0x96, 0x87]))).toBe("中文");
+    expect(decodeShellOutput("already string")).toBe("already string");
+  });
+
+  it("非法 UTF-8 序列降级 GBK 解码", () => {
+    // GBK "中文" = D6 D0 CE C4 —— 对 UTF-8 为非法序列
+    expect(decodeShellOutput(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))).toBe("中文");
+  });
 });
 
 describe("BashTool 执行语义（对齐 s03 run_bash）", () => {

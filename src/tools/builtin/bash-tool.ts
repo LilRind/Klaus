@@ -22,6 +22,7 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { Tool, tryParseJsonObject } from "../tool";
+import { decodeShellOutput } from "../shell-output";
 import type { BackgroundManager } from "../../background/background-manager";
 
 const execAsync = promisify(exec);
@@ -109,8 +110,9 @@ export class BashTool extends Tool {
         timeout: this.timeoutMs,
         windowsHide: true,
         maxBuffer: 10 * 1024 * 1024,
+        encoding: "buffer", // 原始字节捕获：GBK/UTF-8 由 decodeShellOutput 判定
       });
-      const out = `${stdout}${stderr}`.trim();
+      const out = `${decodeShellOutput(stdout)}${decodeShellOutput(stderr)}`.trim();
       if (!out) return "(no output)";
       return out.length > this.maxOutputChars
         ? out.slice(0, this.maxOutputChars)
@@ -126,7 +128,11 @@ export class BashTool extends Tool {
         return `Error: Timeout (${Math.round(this.timeoutMs / 1000)}s)`;
       }
       // 命令自身失败（非零退出码等）：stdout/stderr 也可能是有效信息，对齐 s03 回喂
-      const partial = [err.stdout, err.stderr].filter(Boolean).join("").trim();
+      const partial = [err.stdout, err.stderr]
+        .filter(Boolean)
+        .map((part) => decodeShellOutput(part as Buffer | string))
+        .join("")
+        .trim();
       if (partial) {
         return partial.length > this.maxOutputChars
           ? partial.slice(0, this.maxOutputChars)

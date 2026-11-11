@@ -46,7 +46,7 @@ verify9_project_notes/
 
 # 各章人工验收：测试日志含本地路径与对话记录（隐私，不入库）+ Python 工具缓存
 examples/*/log/
-examples/*/log.md
+examples/*/log*.md
 __pycache__/
 .pytest_cache/
 .ruff_cache/
