@@ -3,8 +3,8 @@
 《Hello Agents》第 7 章「构建你的智能体框架」、第 8 章「记忆与检索」与第 9 章「上下文工程」的 TypeScript 从零实现。
 练习原书：[datawhalechina/Hello-Agents](https://github.com/datawhalechina/Hello-Agents)（框架原版参考：[jjyaoao/helloagents](https://github.com/jjyaoao/helloagents)）。
 不依赖书里的 `hello-agents` Python 包，所有核心层代码按章节架构重写，
-用 vitest + 可注入的 LLM 桩实现全离线测试（189 个用例，跑测试不需要 API Key）；
-LLM 依赖路径另有零 mock 真实模型验证脚本（`pnpm verify:9-real`）。
+用 vitest + 可注入的 LLM 桩实现全离线测试（400+ 个用例，跑测试不需要 API Key）；
+LLM 依赖路径另有零 mock 真实模型验证脚本（`npm run verify:9-real`）。
 
 ## 与书第 7 章的对应关系
 
@@ -78,28 +78,24 @@ LLM 依赖路径另有零 mock 真实模型验证脚本（`pnpm verify:9-real`�
 ```
 hello-agents-ts/
 ├── src/
-│   ├── core/                    # 核心框架层
-│   │   ├── agent.ts             # Agent 抽象基类
-│   │   ├── llm.ts               # ChatLLM 接口 + OpenAI 兼容实现
-│   │   ├── message.ts           # 消息系统
-│   │   ├── config.ts            # 配置管理
-│   │   ├── memory.ts            # execution/reflection 轨迹记忆
-│   │   └── exceptions.ts        # 异常体系
-│   ├── agents/                  # Agent 范式层
-│   │   ├── simple-agent.ts      # 对话 + 文本协议工具调用
-│   │   └── react-agent.ts       # Thought/Action/Observation 循环
-│   │   ├── reflection-agent.ts  # 生成→反思→修改
-│   │   ├── plan-solve-agent.ts  # 先规划后执行
-│   │   └── function-call-agent.ts # 原生函数调用
-│   └── tools/                   # 工具系统层
-│       ├── tool.ts              # Tool 基类 + FunctionTool
-│       ├── registry.ts          # 注册 / 描述生成 / 按名执行
-│       ├── builtin/calculator.ts# 安全表达式求值（递归下降，无 eval）
-│       ├── builtin/search.ts    # Tavily/SerpApi 多源搜索
-│       ├── chain.ts             # 工具链（输出键传递数据）
-│       └── async-executor.ts    # 有界并行执行器
-├── tests/                       # vitest 全离线（ScriptedLLM 桩）
-├── examples/                    # 按章节组织：7/ 第7章示例，8/ 第8章示例
+│   ├── core/                    # 核心框架层（agent/llm/message/config/memory/exceptions/trace-log）
+│   ├── agents/                  # 五种 Agent 范式（Simple/ReAct/Reflection/PlanSolve/FunctionCall）
+│   ├── tools/                   # 工具系统（registry + builtin：calculator/search/file/bash/todo/task/skill/compact/cron/team…）
+│   ├── security/                # 三道闸门权限管线（s03）
+│   ├── hooks/                   # 四挂点 Hook 注册表（s04）
+│   ├── todo/                    # TodoManager 计划状态（s05）
+│   ├── skills/                  # SkillLoader 技能目录扫描（s07）
+│   ├── context/                 # GSSC 上下文构建（书 9 章）+ ContextCompactor 四步压缩（s08）
+│   ├── persistent-memory/       # 文件式持久记忆：store/recall/extract/consolidate（s09）
+│   ├── tasks/                   # 持久任务图 + worktree（s10/s13）
+│   ├── background/              # 后台任务管理器（s11）
+│   ├── scheduler/               # cron 五段解析 + durable 调度（s12）
+│   ├── teams/                   # 任务板 / teammate / 团队协议（s13）
+│   ├── mcp/                     # MCP 连接管理 + 动态工具池（s14）
+│   └── memory/                  # 第八章认知记忆 + RAG（types/storage/rag）
+├── skills/                      # 技能目录（code-review / git-workflow / api-design）
+├── tests/                       # vitest 全离线（ScriptedLLM 桩，400+ 用例）
+├── examples/                    # 7|8|9/ 书章示例；alignment/ 对齐 REPL + 批量；s0X_*/ 各章人工验收样例
 └── vitest.config.ts
 ```
 
@@ -187,6 +183,8 @@ const answer = await agent.run("请帮我计算 (12+8)*3");
 - [x] learn-claude-code s01–s03 对齐（结构化工具分发 / 三道闸门权限 / 会话级全轨迹）
 - [x] learn-claude-code s04–s06 对齐（hooks 四挂点 / todo_write+reminder / task 子 agent）
 - [x] learn-claude-code s07–s09 对齐（skill 按需加载 / 四步上下文压缩 / 文件式持久记忆）
+- [x] learn-claude-code s10–s14 对齐（持久任务图 / 后台任务 / cron 调度 / 任务板与 teammate / MCP 动态工具池）
 
 > 对齐机制全部落在 FunctionCallAgent 主线（教学线冻结不动）；验证入口
-> `npm run example:alignment`（分章 `example:alignment:s04` … `:s09`）。
+> `npm run example:alignment`（分章 `example:alignment:s04` … `:s14`；交互式逐条验证
+> `npm run example:alignment:repl -- --stage s07` 按教学章节累积装配）。
