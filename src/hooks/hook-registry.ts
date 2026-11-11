@@ -115,38 +115,64 @@ export class HookRegistry {
   }
 }
 
-// ---------- 内置示例 hook（对齐 s04 的四个演示回调） ----------
+// ---------- 内置示例 hook（对齐 s04 的四个演示回调；label 可定制前缀） ----------
 
 export const LARGE_OUTPUT_CHAR_LIMIT = 100_000;
 
-/** PreToolUse：打印每次工具调用（对齐 s04 log_hook） */
-export function logHook(call: ToolCallRequest): string | undefined {
-  console.log(`[HOOK] PreToolUse: ${call.function.name}(${summarize(call)})`);
-  return undefined;
+export interface DemoHooks {
+  userPromptSubmit: UserPromptSubmitHook;
+  preToolUse: PreToolUseHook;
+  postToolUse: PostToolUseHook;
+  stop: StopHook;
 }
 
-/** PostToolUse：超大输出提醒（对齐 s04 large_output_hook） */
+/**
+ * 四挂点示例 hook 工厂（对齐 s04 的四个演示回调）。
+ * label 决定控制台前缀：默认 "HOOK"（父/装配层）；子 agent 传 "sub-hook"。
+ */
+export function createDemoHooks(label = "HOOK"): DemoHooks {
+  const tag = `[${label}]`;
+  return {
+    preToolUse(call) {
+      console.log(`${tag} PreToolUse: ${call.function.name}(${summarize(call)})`);
+      return undefined;
+    },
+    postToolUse(call, output) {
+      if (output.length > LARGE_OUTPUT_CHAR_LIMIT) {
+        console.warn(
+          `${tag} PostToolUse: output of ${call.function.name} is ${output.length} chars (> ${LARGE_OUTPUT_CHAR_LIMIT})`,
+        );
+      }
+    },
+    userPromptSubmit() {
+      console.log(`${tag} UserPromptSubmit: working in ${process.cwd()}`);
+    },
+    stop(history) {
+      const toolCount = countToolMessages(history);
+      console.log(`${tag} Stop: session used ${toolCount} tool calls`);
+      return undefined;
+    },
+  };
+}
+
+// 具名默认版（label=HOOK，父/装配层与既有用法兼容）
+export function logHook(call: ToolCallRequest): string | undefined {
+  return createDemoHooks().preToolUse(call);
+}
+
 export function largeOutputHook(
   call: ToolCallRequest,
   output: string,
 ): void {
-  if (output.length > LARGE_OUTPUT_CHAR_LIMIT) {
-    console.warn(
-      `[HOOK] PostToolUse: output of ${call.function.name} is ${output.length} chars (> ${LARGE_OUTPUT_CHAR_LIMIT})`,
-    );
-  }
+  createDemoHooks().postToolUse(call, output);
 }
 
-/** UserPromptSubmit：注入工作目录上下文（对齐 s04 context_inject_hook） */
 export function contextInjectHook(): void {
-  console.log(`[HOOK] UserPromptSubmit: working in ${process.cwd()}`);
+  createDemoHooks().userPromptSubmit("");
 }
 
-/** Stop：收尾统计——本会话累计工具结果数（对齐 s04 summary_hook） */
 export function summaryHook(history: readonly unknown[]): string | undefined {
-  const toolCount = countToolMessages(history);
-  console.log(`[HOOK] Stop: session used ${toolCount} tool calls`);
-  return undefined;
+  return createDemoHooks().stop(history);
 }
 
 // ---------- 内部辅助 ----------

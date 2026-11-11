@@ -10,6 +10,10 @@ import {
   createStandardPermissionRules,
   type PermissionRule,
 } from "../src/security/permission";
+import {
+  createPackageInstallAskRule,
+  isPackageInstallCommand,
+} from "../src/security/permission";
 import { ToolRegistry } from "../src/tools/registry";
 import {
   ReadFileTool,
@@ -106,6 +110,33 @@ describe("PermissionChecker 三道闸门", () => {
 });
 
 describe("标准规则集", () => {
+  it("装包命令识别：命中 install/add，不命中查询与运行类命令", () => {
+    expect(isPackageInstallCommand("pip install ruff")).toBe(true);
+    expect(isPackageInstallCommand("python -m pip install ruff --quiet")).toBe(true);
+    expect(isPackageInstallCommand("python3.12 -m pip install ruff")).toBe(true);
+    expect(isPackageInstallCommand("npm install")).toBe(true);
+    expect(isPackageInstallCommand("npm i -D vitest")).toBe(true);
+    expect(isPackageInstallCommand("yarn add lodash")).toBe(true);
+    expect(isPackageInstallCommand("pnpm add vite")).toBe(true);
+    // 不命中：查询 / 运行 / 无关命令
+    expect(isPackageInstallCommand("pip list")).toBe(false);
+    expect(isPackageInstallCommand("pip show ruff")).toBe(false);
+    expect(isPackageInstallCommand("npm run test")).toBe(false);
+    expect(isPackageInstallCommand("npm install --help")).toBe(false);
+    expect(isPackageInstallCommand("node install.js")).toBe(false);
+    expect(isPackageInstallCommand("type package.json")).toBe(false);
+  });
+
+  it("装包 ask 规则（PACKAGE_INSTALL_POLICY=ask 时装配）：命中升闸门 2", () => {
+    const rule = createPackageInstallAskRule();
+    expect(rule.tools).toEqual(["bash"]);
+    expect(
+      rule.test({ toolName: "bash", args: { command: "pip install ruff" } }),
+    ).toContain("安装软件包");
+    expect(
+      rule.test({ toolName: "bash", args: { command: "pip list" } }),
+    ).toBeNull();
+  });
   it("写入 .git 硬拒绝；工作区外写入询问；工作区内默认放行", async () => {
     const root = await makeWorkspace();
     const { denyRules, askRules } = createStandardPermissionRules({

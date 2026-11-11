@@ -28,6 +28,7 @@ import {
   ConsoleApprovalPrompt,
   PermissionChecker,
   createStandardPermissionRules,
+  createPackageInstallAskRule,
   createMcpPermissionChecker,
   HookRegistry,
   logHook,
@@ -147,9 +148,14 @@ export async function buildAlignmentAgent(
   // ---------- 权限（s03 标准；s14 再包 MCP 宿主策略） ----------
   const standardRules = createStandardPermissionRules({ workspaceRoot: workspace });
   const approvalPrompt = options.prompt ?? new ConsoleApprovalPrompt();
+  // 装包策略（默认 allow 自动安装；.env 设 PACKAGE_INSTALL_POLICY=ask → 装包弹 y/N 审批）
+  const askRules =
+    (process.env.PACKAGE_INSTALL_POLICY ?? "allow").trim().toLowerCase() === "ask"
+      ? [...standardRules.askRules, createPackageInstallAskRule()]
+      : standardRules.askRules;
   let permissionChecker: PermissionChecker = new PermissionChecker({
     denyRules: standardRules.denyRules,
-    askRules: standardRules.askRules,
+    askRules,
     prompt: approvalPrompt,
   });
 
@@ -216,7 +222,7 @@ export async function buildAlignmentAgent(
       manager: mcpManager,
       base: {
         denyRules: standardRules.denyRules,
-        askRules: standardRules.askRules,
+        askRules,
         prompt: approvalPrompt,
       },
       prompt: approvalPrompt,
@@ -282,7 +288,7 @@ export async function buildAlignmentAgent(
 
   // s06：task 工具（子注册表 = baseTools 剔除 task，单层委派）
   const taskTool = has(6)
-    ? createTaskTool({ llm, tools: baseTools, permissionChecker, hooks })
+    ? createTaskTool({ llm, tools: baseTools, permissionChecker, traceLog })
     : undefined;
 
   const registry = new ToolRegistry();

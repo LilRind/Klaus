@@ -141,7 +141,7 @@ describe("s06 Subagent", () => {
     expect(subToolMsg?.content).toContain("子任务禁止执行工具");
   });
 
-  it("共享 hooks：子 agent 的工具调用触发同一注册表的 PreToolUse", async () => {
+  it("子 hooks 独立：不触发父自定义 hooks（安全仍共享权限闸门）", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const seen: string[] = [];
     const hooks = new HookRegistry().register("PreToolUse", (c) => {
@@ -161,7 +161,8 @@ describe("s06 Subagent", () => {
     const parent = new FunctionCallAgent("parent", parentLlm, registry, { hooks });
     await parent.run("开始");
 
-    expect(seen).toEqual(["task", "echo"]);
+    // 父注册表只看到父自己的 task 调用；子的 echo 走子自己的 [sub-hook] hooks
+    expect(seen).toEqual(["task"]);
   });
 
   it("30 轮上限：子 agent 达到上限后强制收尾并返回文本", async () => {
@@ -207,7 +208,7 @@ describe("s06 Subagent", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("子 agent 轨迹带 [sub] 前缀（对齐 lcc 的 [sub] 输出观察点）", async () => {
+  it("子 agent 轨迹带 [sub-tool] 前缀，hook 日志带 [sub-hook] 前缀", async () => {
     const logs: string[] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
       logs.push(args.join(" "));
@@ -220,9 +221,11 @@ describe("s06 Subagent", () => {
     await task.executeArgs({ prompt: "查点东西" });
     spy.mockRestore();
 
-    // 子自己的轮次输出带 [sub]，与父/装配层输出区分
-    expect(logs.some((line) => line.includes("[sub] 🔧 第 1 轮"))).toBe(true);
-    expect(logs.some((line) => line.includes("[sub]    > echo"))).toBe(true);
+    // 子的工具轨迹带 [sub-tool]，hook 日志带 [sub-hook]
+    expect(logs.some((line) => line.includes("[sub-tool] 🔧 第 1 轮"))).toBe(true);
+    expect(logs.some((line) => line.includes("[sub-tool]    > echo"))).toBe(true);
+    expect(logs.some((line) => line.includes("[sub-hook] PreToolUse: echo"))).toBe(true);
+    expect(logs.some((line) => line.includes("[sub-hook] Stop"))).toBe(true);
     // 边界标记仍是装配层输出（无前缀）
     expect(logs.some((line) => line.includes("[Subagent started]"))).toBe(true);
   });

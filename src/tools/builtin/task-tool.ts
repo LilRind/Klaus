@@ -11,7 +11,8 @@
  * - 执行：同一进程与工作区；
  * - 返回值：只返回最终文本（子轨迹不进父消息列表）；
  * - 委派深度：子工具集剔除 task——单层委派由构造保证；
- * - 工具策略：共享同一 PermissionChecker 与 HookRegistry（权限/hooks 一致）。
+ * - 工具策略：共享同一 PermissionChecker（安全边界一致）；子使用自己的
+ *   [sub-hook] 标签示例 hooks（控制台可区分父子，不再触发父自定义 hooks）。
  */
 
 import { Tool, tryParseJsonObject } from "../tool";
@@ -20,7 +21,8 @@ import { FunctionCallAgent } from "../../agents/function-call-agent";
 import type { ChatLLM } from "../../core/llm";
 import { AgentConfig } from "../../core/config";
 import type { PermissionChecker } from "../../security/permission";
-import type { HookRegistry } from "../../hooks/hook-registry";
+import { HookRegistry, createDemoHooks } from "../../hooks/hook-registry";
+import type { AgentTraceLog } from "../../core/trace-log";
 
 export const SUBAGENT_MAX_TURNS = 30;
 
@@ -33,6 +35,8 @@ export interface TaskToolOptions {
   permissionChecker?: PermissionChecker;
   /** 共享 hook 注册表 */
   hooks?: HookRegistry;
+  /** 子 agent 轨迹日志（传入后子的 tool 事件也落 logs/agent-trace/） */
+  traceLog?: AgentTraceLog;
   /** 子 agent system prompt */
   systemPrompt?: string;
   /** 子 agent 轮数上限，默认 30（对齐 s06） */
@@ -105,15 +109,16 @@ export class TaskTool extends Tool {
     }
     console.log(`[Subagent started] ${prompt.slice(0, 80)}`);
     try {
-      // 每次调用创建全新 agent——fresh history（对齐 s06 run_subagent）；
-      // verbose + [sub] 前缀对齐 lcc：子的工具调用以 "[sub] ..." 输出，
-      // 与父的 🔧 轮次区分（共享 hooks 的 [HOOK] 行仍无前缀——与 lcc 一致）
+      // 每次调用创建全新 agent——fresh history（对齐 s06 run_subagent）。
+      // 输出标签对齐用户约定：子的工具轨迹用 [sub-tool] 前缀、
+      // 子的 hook 日志用 [sub-hook] 前缀（独立注册，与父的 [HOOK] 区分）
       const subAgent = new FunctionCallAgent("subagent", this.options.llm, this.subRegistry, {
         systemPrompt: this.options.systemPrompt ?? DEFAULT_SUB_SYSTEM,
         maxToolIterations: this.maxTurns,
-        hooks: this.options.hooks,
         config: new AgentConfig({ verbose: true }),
-        tracePrefix: "[sub] ",
+        tracePrefix: "[sub-tool] ",
+        traceLog: this.options.traceLog,
+        hooks: this.buildSubHooks(),
       });
       const answer = await subAgent.run(prompt);
       console.log("[Subagent done]");
@@ -121,5 +126,16 @@ export class TaskTool extends Tool {
     } catch (error) {
       return `❌ 子 agent 执行失败: ${error instanceof Error ? error.message : String(error)}`;
     }
+  }
+
+  /** 子 agent 专属 hook 注册表：[sub-hook] 标签示例 hooks */
+  private buildSubHooks(): HookRegistry {
+    const registry = new HookRegistry();
+    const demo = createDemoHooks("sub-hook");
+    return registry
+      .register("UserPromptSubmit", demo.userPromptSubmit)
+      .register("PreToolUse", demo.preToolUse)
+      .register("PostToolUse", demo.postToolUse)
+      .register("Stop", demo.stop);
   }
 }

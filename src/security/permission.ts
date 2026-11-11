@@ -208,6 +208,32 @@ export function containsDestructiveCommand(command: string): boolean {
   return DESTRUCTIVE_COMMAND_WORD.test(command);
 }
 
+/**
+ * 装包类命令识别（可选闸门 2 规则用）：npm/yarn/pnpm/pip/pipx/python -m pip
+ * 的 install/add/ci。默认不启用（default-allow，对齐 s03）；需要"装包也要
+ * y/N 审批"时由装配层按 PACKAGE_INSTALL_POLICY=ask 加入 askRules。
+ */
+const PACKAGE_INSTALL_PATTERN =
+  /(?:^|[;&|]\s*)(?:npm\s+(?:install|i|add|ci)|yarn\s+(?:add|install)|pnpm\s+(?:add|install)|pipx?\s+install|python[\d.]*(?:\s+-m\s+pip)?\s+install)\b(?!\s+(?:--help|-h)(?:\s|$))/i;
+
+export function isPackageInstallCommand(command: string): boolean {
+  return PACKAGE_INSTALL_PATTERN.test(command);
+}
+
+/** 装包命令 → 闸门 2（人工审批）的规则；命中返回原因，未命中 null */
+export function createPackageInstallAskRule(): PermissionRule {
+  return {
+    tools: ["bash"],
+    test(request) {
+      const command = stringArg(request.args.command);
+      if (command && isPackageInstallCommand(command)) {
+        return `安装软件包（PACKAGE_INSTALL_POLICY=ask）: ${command.slice(0, 80)}`;
+      }
+      return null;
+    },
+  };
+}
+
 /** 便捷装配：标准规则 + 指定审批器 */
 export function createStandardPermissionChecker(
   options: StandardPermissionOptions & { prompt?: ApprovalPrompt },
