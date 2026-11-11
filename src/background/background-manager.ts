@@ -245,6 +245,17 @@ export class BackgroundManager {
     return this.ready.length > 0;
   }
 
+  /**
+   * 是否仍有后台任务在跑（s17 goal defer 判据）：关键结果还没回到
+   * 对话时立即判断没有意义，Goal gate 应 defer 而不是评估。
+   */
+  hasRunning(): boolean {
+    for (const task of this.tasks.values()) {
+      if (task.status === "running") return true;
+    }
+    return false;
+  }
+
   /** 尽力清理：终止仍在运行的进程树并停止后续登记（生命周期清理，非沙箱） */
   async dispose(): Promise<void> {
     this.disposed = true;

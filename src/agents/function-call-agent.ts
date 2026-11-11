@@ -17,9 +17,12 @@ import type { AgentTraceLog } from "../core/trace-log";
 import { parseJsonObjectArguments } from "../tools/tool";
 import type { ToolRegistry } from "../tools/registry";
 import { HookRegistry } from "../hooks/hook-registry";
+import type { GoalGate } from "../goal/goal-types";
 import { TODO_REMINDER_ROUNDS } from "../todo/todo-manager";
 import {
   ContextCompactor,
+  type CompactionObserver,
+  type CompactionOperation,
   isPromptTooLongError,
   MAX_REACTIVE_RETRIES,
 } from "../context/compactor";
@@ -90,6 +93,19 @@ export interface FunctionCallAgentOptions {
    * reactive compact 路径（存量零回归）。
    */
   llmRecovery?: LlmRecovery;
+  /**
+   * s17 Goal gate（对齐 lcc /goal 的会话级 Stop hook）：模型不再调用
+   * 工具只代表这一轮想停——s04 Stop hook 放行后，独立判断器读对话
+   * 证据决定是否继续。block → 注入 `[Goal still active]` 消息续跑
+   * （消耗迭代配额，有界）；defer/limit/error/achieved/failed → 返回
+   * （控制权交还调用方 / AsyncEventLoop 唤醒源）。不传时零影响。
+   */
+  goalGate?: GoalGate;
+  /**
+   * s17 defer 判据：是否仍有后台任务在跑（BackgroundManager.hasRunning）。
+   * 为真时 goal gate 不评估直接 defer——关键结果还没回到对话。
+   */
+  isBackgroundRunning?: () => boolean;
 }
 
 export class FunctionCallAgent extends Agent {
@@ -116,6 +132,8 @@ export class FunctionCallAgent extends Agent {
     | (() => ScheduledPromptJob[] | Promise<ScheduledPromptJob[]>)
     | undefined;
   private readonly llmRecovery: LlmRecovery | undefined;
+  private readonly goalGate: GoalGate | undefined;
+  private readonly isBackgroundRunning: (() => boolean) | undefined;
   /** systemPromptBuilder 产出的本轮 system（run 期间生效） */
   private activeSystemPrompt: string | undefined;
   /** s05：连续未使用 todo_write 的工具轮数（reminder 计数器） */
@@ -144,6 +162,8 @@ export class FunctionCallAgent extends Agent {
     this.collectNotifications = options.collectNotifications;
     this.collectScheduledPrompts = options.collectScheduledPrompts;
     this.llmRecovery = options.llmRecovery;
+    this.goalGate = options.goalGate;
+    this.isBackgroundRunning = options.isBackgroundRunning;
   }
 
   override async run(input: string): Promise<string> {
@@ -188,6 +208,8 @@ export class FunctionCallAgent extends Agent {
     });
     // s15 对齐 lcc agent_loop 顶部 `state = RecoveryState()`：每轮新建恢复状态
     this.llmRecovery?.beginTurn();
+    // s17 对齐 lcc begin_query：每轮开始重置连续 block 计数（cap 按 query 计）
+    this.goalGate?.beginQuery?.();
     const conversation = this.buildConversation();
     // s15 轮级 cron 注入的 active_request 累积（对齐 lcc 3155-3158，压缩摘要键）
     const scheduledRequests: string[] = [];
@@ -241,6 +263,7 @@ export class FunctionCallAgent extends Agent {
         const compacted = await this.contextCompactor.prepare(
           this.history,
           activeRequest,
+          this.compactionObserver(),
         );
         this.replaceHistory(compacted);
         conversation.length = 0;
@@ -316,6 +339,34 @@ export class FunctionCallAgent extends Agent {
           this.addMessage(forceMessage);
           conversation.push(forceMessage.toChatMessage());
           continue;
+        }
+        // s17 对齐：模型不调工具只代表这轮想停——独立判断器读对话
+        // 证据决定整任务是否完成。block → 注入理由续跑（消耗迭代配额）；
+        // defer/limit/error → 交还控制权且目标保留；achieved/failed → 目标已清除
+        if (this.goalGate) {
+          const decision = await this.goalGate.evaluateAfterTurn(
+            this.history,
+            this.isBackgroundRunning?.() ?? false,
+          );
+          if (decision.action === "block") {
+            this.trace(`\n🎯 goal 未达成，继续: ${(decision.reason ?? "").slice(0, 80)}`);
+            const goalMessage = Message.user(
+              "[Goal still active]\n" +
+                `Condition: ${decision.condition ?? ""}\n` +
+                `Evaluator: ${decision.reason ?? ""}\n` +
+                "Continue working and surface the missing evidence.",
+            );
+            this.addMessage(goalMessage);
+            conversation.push(goalMessage.toChatMessage());
+            continue;
+          }
+          if (decision.action !== "allow") {
+            this.trace(
+              `\n🎯 goal gate: ${decision.action}${
+                decision.reason ? `: ${decision.reason.slice(0, 100)}` : ""
+              }`,
+            );
+          }
         }
         response = result.content ?? "";
         this.trace(`\n✔ 循环结束：模型未再调用工具（共 ${iteration + 1} 次模型调用）`);
@@ -436,6 +487,7 @@ export class FunctionCallAgent extends Agent {
         const compacted = await this.contextCompactor.compactHistory(
           this.history,
           activeRequest,
+          this.compactionObserver(),
         );
         this.replaceHistory(compacted);
         conversation.length = 0;
@@ -534,6 +586,7 @@ export class FunctionCallAgent extends Agent {
           const compacted = await this.contextCompactor.reactiveCompact(
             this.history,
             activeRequest,
+            this.compactionObserver(),
           );
           this.replaceHistory(compacted);
           conversation.length = 0;
@@ -585,6 +638,46 @@ export class FunctionCallAgent extends Agent {
         ? message
         : message.replace(/^(\n?)/, `$1${this.tracePrefix}`);
     console.log(prefixed);
+  }
+
+  /**
+   * s08 观测桥：机制层的 CompactionOperation 统一转成 traceLog 事件；
+   * verbose 模式下再用 [compact]/[sub-compact] 前缀输出当下可见摘要。
+   * 与 [HOOK]/[sub-hook] 的分工一致：traceLog 事后查得到，console 当下看得见。
+   */
+  private compactionObserver(): CompactionObserver | undefined {
+    if (!this.traceLog && !this.config.verbose) return undefined;
+    return async (operation) => {
+      await this.traceLog?.emit({
+        type: "compaction",
+        compactionStage: operation.stage,
+        detail: operation.detail,
+        beforeMessages: operation.beforeMessages,
+        afterMessages: operation.afterMessages,
+        beforeChars: operation.beforeChars,
+        afterChars: operation.afterChars,
+        durationMs: operation.durationMs,
+        ...(operation.artifacts.length > 0
+          ? { artifacts: [...operation.artifacts] }
+          : {}),
+      });
+
+      if (!this.config.verbose) return;
+      const tag = this.tracePrefix === undefined ? "compact" : "sub-compact";
+      const delta = operation.beforeChars - operation.afterChars;
+      const artifacts = operation.artifacts.length
+        ? ` · files: ${operation.artifacts
+            .map((path) => truncateForTrace(path, 120))
+            .join(", ")}`
+        : "";
+      this.trace(
+        `\n📦 [${tag}] ${operation.stage}: ` +
+          `${operation.beforeMessages}→${operation.afterMessages} msgs, ` +
+          `${operation.beforeChars}→${operation.afterChars} chars ` +
+          `(${delta >= 0 ? "-" : "+"}${Math.abs(delta)}) · ` +
+          `${operation.durationMs}ms${artifacts}`,
+      );
+    };
   }
 }
 

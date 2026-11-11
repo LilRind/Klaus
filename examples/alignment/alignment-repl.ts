@@ -13,11 +13,13 @@
  *   - 输入 prompt 回车发送；同一会话内工具轨迹跨轮保留（s01 会话语义），
  *     模型看得到"之前跑过什么命令、看到什么输出"——这就是多轮聊天的底座；
  *   - help        列出全部章节的参考 prompt
- *   - help s05    只看某一章（s01…s15）
+ *   - help s05    只看某一章（s01…s17）
  *   - q / exit    退出（Ctrl+C 也可）
  *   - del/rm 等破坏性命令、越区路径会弹 y/N 人工审批（拒绝安全）
  *   - 装配与批量演示完全同源（agent-assembly.ts）：hooks/todo/task/
  *     skills/compact/memory/任务图/后台任务/cron/teammate/MCP 全量可用
+ *   - s17 goal loop：/goal <条件> 设目标后模型自动续跑，直到独立判断器
+ *     认定达成；后台任务在跑时 defer 不判断，完成后自动唤醒重入
  *   - s09 跨会话验证：记忆落在工作区 .memory\，**退出重进 REPL 记忆仍在**，
  *     直接问 "What indentation style do I prefer?" 即可验证跨会话召回
  *   - 每次运行的完整轨迹自动落盘 logs/agent-trace/*.jsonl（审计/复现）+ .md
@@ -26,6 +28,7 @@
 import "dotenv/config";
 import { createInterface } from "node:readline";
 import type { ApprovalPrompt, PermissionRequest } from "../../src/index";
+import { CLEAR_ALIASES } from "../../src/index";
 import {
   ALIGNMENT_PROMPTS,
   buildAlignmentAgent,
@@ -137,6 +140,7 @@ async function main(): Promise<void> {
     pumpCron,
     harnessLoop,
     asyncEventLoop,
+    goal: goalController,
     dispose,
   } =
     await buildAlignmentAgent({
@@ -156,7 +160,10 @@ async function main(): Promise<void> {
       `持久记忆目录: ${memoryDir}（退出重进，记忆仍在——s09 跨会话验证入口）`,
     );
   }
-  console.log("输入 prompt 回车发送 | help [s01…s15] 查看参考 prompt | q 退出\n");
+  console.log("输入 prompt 回车发送 | help [s01…s17] 查看参考 prompt | q 退出\n");
+  if (goalController) {
+    console.log("/goal <条件> 设目标 | /goal 查状态 | /goal clear 清除（s17 goal loop）\n");
+  }
 
   // s15：启动自动唤醒轮询（cron/团队事件/后台完成 → 空闲自动跑一轮）
   asyncEventLoop?.start();
@@ -175,11 +182,33 @@ async function main(): Promise<void> {
       continue;
     }
     try {
+      // s17：/goal 命令拦截（对应 lcc session.submit 层）
+      let turnInput = query;
+      if (goalController && (query === "/goal" || query.startsWith("/goal "))) {
+        const argument = query.slice(5).trim();
+        if (!argument) {
+          console.log(`\n${goalController.status()}\n`);
+          continue;
+        }
+        if (CLEAR_ALIASES.has(argument.toLowerCase())) {
+          console.log(`\n${goalController.clear(argument.toLowerCase())}\n`);
+          continue;
+        }
+        goalController.setGoal(argument);
+        console.log(`\n🎯 Goal set: ${argument}（立即按新条件开工）`);
+        turnInput = argument; // lcc 同款：条件立即作为本轮任务交给主模型
+      }
       // s15：用户轮走 HarnessLoop 互斥入口（与自动唤醒事件轮串行化）
       const answer = harnessLoop
-        ? await harnessLoop.runUserTurn(query)
-        : await agent.run(query);
+        ? await harnessLoop.runUserTurn(turnInput)
+        : await agent.run(turnInput);
       console.log(`\n回答: ${answer}\n`);
+      // s17：终态回显（达成/失败；未达成的 block 理由已在轨迹里可见）
+      if (goalController?.lastStatus?.met) {
+        console.log(`[goal] achieved: ${goalController.lastStatus.reason}\n`);
+      } else if (goalController?.lastStatus?.failed) {
+        console.log(`[goal] failed: ${goalController.lastStatus.reason}\n`);
+      }
     } catch (error) {
       console.log(
         `\n执行失败: ${error instanceof Error ? error.message : String(error)}\n`,

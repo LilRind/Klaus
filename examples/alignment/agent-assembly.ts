@@ -70,6 +70,8 @@ import {
   WorkflowRuntime,
   LlmWorkflowAgentRunner,
   WorkflowTool,
+  GoalController,
+  PromptGoalEvaluator,
   type ExecutionState,
   type ApprovalPrompt,
   type ChatLLM,
@@ -78,7 +80,7 @@ import {
 } from "../../src/index";
 import { Message } from "../../src/core/message";
 
-export const MAX_ALIGNMENT_STAGE = 16;
+export const MAX_ALIGNMENT_STAGE = 17;
 
 export interface AlignmentAssemblyOptions {
   /** 工作区根目录（工具围栏放开，越区裁决权交给权限层） */
@@ -108,6 +110,7 @@ export interface AlignmentAssemblyFeatures {
   mcp: boolean; // s14+
   integratedHarness: boolean; // s15+
   workflow: boolean; // s16+
+  goal: boolean; // s17+
 }
 
 // ---------- s16：review-changes 样例 workflow（对齐 lcc SAMPLE_META / sample_workflow） ----------
@@ -237,6 +240,8 @@ export interface AlignmentAssembly {
   mcp?: McpConnectionManager;
   /** s16+：workflow runtime（测试观测点：注册表与样例编排） */
   workflow?: WorkflowRuntime;
+  /** s17+：goal controller（REPL /goal 命令与状态回显用） */
+  goal?: GoalController;
   /** s09+：system prompt 构建器（测试观测点） */
   buildSystemPrompt?: (input: string) => Promise<string>;
   /** 收尾：清理后台进程树（<s11 时 no-op；durable cron 保留） */
@@ -517,6 +522,12 @@ export async function buildAlignmentAgent(
       "For parallel work, create task nodes, optionally bind worktrees, then spawn " +
       "teammates and collect their results from team events. ";
   }
+  if (has(17)) {
+    // s17 对齐 lcc s17 system prompt：让独立判断器有证据可查
+    baseInstructions +=
+      "After running verification commands, clearly state the command and its result " +
+      "in the conversation so an independent evaluator can judge completion. ";
+  }
   baseInstructions +=
     "Do not ask for approval yourself; for risky operations still request the tool call — " +
     "the harness will approve or deny before execution.";
@@ -542,11 +553,32 @@ export async function buildAlignmentAgent(
     : undefined;
 
   // ---------- agent ----------
+  // ---------- s17：goal controller（独立判断器 + 会话级目标状态） ----------
+  const goalEvaluatorModel = (process.env.GOAL_EVALUATOR_MODEL_ID ?? "").trim();
+  const blockCapRaw = Number(process.env.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP ?? "");
+  const goalOptions: { blockCap?: number } = {};
+  if (Number.isFinite(blockCapRaw) && blockCapRaw >= 1) {
+    goalOptions.blockCap = Math.floor(blockCapRaw);
+  }
+  const goalController = has(17)
+    ? new GoalController(
+        new PromptGoalEvaluator(
+          // 判断器可用更小模型（lcc GOAL_EVALUATOR_MODEL_ID 同思路），缺省复用主模型
+          goalEvaluatorModel ? new OpenAICompatLLM({ model: goalEvaluatorModel }) : llm,
+        ),
+        goalOptions,
+      )
+    : undefined;
   const agent = new FunctionCallAgent("alignment-agent", llm, registry, {
     config: new AgentConfig({ verbose: true }),
     traceLog,
     systemPrompt: staticSystem,
     ...(hooks ? { hooks } : {}),
+    // s17：goal gate（Stop hook 之后、自然退出之前）+ 后台 defer 判据
+    ...(goalController ? { goalGate: goalController } : {}),
+    ...(goalController && background
+      ? { isBackgroundRunning: () => background.hasRunning() }
+      : {}),
     // s11/s13：后台命令通知 + teammate 团队事件在下一次模型调用前注入
     ...(background
       ? {
@@ -657,6 +689,7 @@ export async function buildAlignmentAgent(
       mcp: has(14),
       integratedHarness: has(15),
       workflow: has(16),
+      goal: has(17),
     },
     pumpCron: async () => {
       if (!cronScheduler) return;
@@ -674,6 +707,7 @@ export async function buildAlignmentAgent(
     ...(asyncEventLoop ? { asyncEventLoop } : {}),
     ...(mcpManager ? { mcp: mcpManager } : {}),
     ...(workflowRuntime ? { workflow: workflowRuntime } : {}),
+    ...(goalController ? { goal: goalController } : {}),
     ...(systemPromptBuilder ? { buildSystemPrompt: systemPromptBuilder } : {}),
     dispose: async () => {
       asyncEventLoop?.stop();
@@ -734,4 +768,7 @@ export const ALIGNMENT_PROMPTS: [string, string][] = [
   ["s15", "Spawn a teammate and send it a message asking for a short README summary（观察团队事件自动唤醒一轮）"],
   ["s16", "Run the saved workflow named review-changes with args {\"changes\": \"def load_user(id): return db.execute(f'SELECT * FROM users WHERE id = {id}')\"}（观察一次 tool_use 内 launched→workflow_phase→task_notification 事件流与 .runtime/ 产物）"],
   ["s16", "Resume the previous review-changes run using the runId from the earlier result（观察全部 status=cached、agents=0 tokens=0）"],
+  ["s17", "/goal Create a file called goal-demo.txt containing the text ok, then verify by reading it back（观察未达成自动续跑与判断器证据检查）"],
+  ["s17", "/goal（查看活跃目标状态）"],
+  ["s17", "/goal clear（清除目标；stop/off/reset/none/cancel 同义）"],
 ];
