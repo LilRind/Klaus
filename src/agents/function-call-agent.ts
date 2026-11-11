@@ -37,6 +37,11 @@ export interface FunctionCallAgentOptions {
    */
   hooks?: HookRegistry;
   /**
+   * 轨迹输出前缀（s06 对齐：子 agent 用 "[sub] "，与父的输出区分；
+   * 插在每行行首，保留消息自带的前导换行）
+   */
+  tracePrefix?: string;
+  /**
    * 上下文压缩器（s08 对齐）：传入后每次调用模型前跑四步压缩管线，
    * history 即工作数组（system 独立于 history，压缩永不动 system）。
    * 不传时本 Agent 行为与 s07 之前完全一致（存量零回归的开关化设计）。
@@ -71,6 +76,7 @@ export class FunctionCallAgent extends Agent {
   readonly maxToolIterations: number;
   private readonly traceLog: AgentTraceLog | undefined;
   private readonly hooks: HookRegistry;
+  private readonly tracePrefix: string | undefined;
   private readonly contextCompactor: ContextCompactor | undefined;
   private readonly systemPromptBuilder:
     | ((input: string) => Promise<string>)
@@ -106,6 +112,7 @@ export class FunctionCallAgent extends Agent {
     this.maxToolIterations = options.maxToolIterations ?? this.config.maxToolIterations;
     this.traceLog = options.traceLog;
     this.hooks = options.hooks ?? new HookRegistry();
+    this.tracePrefix = options.tracePrefix;
     this.contextCompactor = options.contextCompactor;
     this.systemPromptBuilder = options.systemPromptBuilder;
     this.onRunCompleted = options.onRunCompleted;
@@ -424,7 +431,12 @@ export class FunctionCallAgent extends Agent {
 
   /** 执行轨迹输出（config.verbose 开启时打印；对齐 s01/s02 的控制台 UX） */
   private trace(message: string): void {
-    if (this.config.verbose) console.log(message);
+    if (!this.config.verbose) return;
+    const prefixed =
+      this.tracePrefix === undefined
+        ? message
+        : message.replace(/^(\n?)/, `$1${this.tracePrefix}`);
+    console.log(prefixed);
   }
 }
 

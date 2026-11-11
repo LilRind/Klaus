@@ -18,6 +18,7 @@ import { Tool, tryParseJsonObject } from "../tool";
 import { ToolRegistry } from "../registry";
 import { FunctionCallAgent } from "../../agents/function-call-agent";
 import type { ChatLLM } from "../../core/llm";
+import { AgentConfig } from "../../core/config";
 import type { PermissionChecker } from "../../security/permission";
 import type { HookRegistry } from "../../hooks/hook-registry";
 
@@ -104,11 +105,15 @@ export class TaskTool extends Tool {
     }
     console.log(`[Subagent started] ${prompt.slice(0, 80)}`);
     try {
-      // 每次调用创建全新 agent——fresh history（对齐 s06 run_subagent）
+      // 每次调用创建全新 agent——fresh history（对齐 s06 run_subagent）；
+      // verbose + [sub] 前缀对齐 lcc：子的工具调用以 "[sub] ..." 输出，
+      // 与父的 🔧 轮次区分（共享 hooks 的 [HOOK] 行仍无前缀——与 lcc 一致）
       const subAgent = new FunctionCallAgent("subagent", this.options.llm, this.subRegistry, {
         systemPrompt: this.options.systemPrompt ?? DEFAULT_SUB_SYSTEM,
         maxToolIterations: this.maxTurns,
         hooks: this.options.hooks,
+        config: new AgentConfig({ verbose: true }),
+        tracePrefix: "[sub] ",
       });
       const answer = await subAgent.run(prompt);
       console.log("[Subagent done]");

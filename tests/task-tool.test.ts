@@ -206,4 +206,24 @@ describe("s06 Subagent", () => {
     expect(readResult?.content).toContain("from sub");
     await fs.rm(root, { recursive: true, force: true });
   });
+
+  it("子 agent 轨迹带 [sub] 前缀（对齐 lcc 的 [sub] 输出观察点）", async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      logs.push(args.join(" "));
+    });
+    const subLlm = new ScriptedLLM([], [
+      turn(call("s1", "echo", { text: "查" })),
+      finalTurn("结论"),
+    ]);
+    const task = createTaskTool({ llm: subLlm, tools: [echo] });
+    await task.executeArgs({ prompt: "查点东西" });
+    spy.mockRestore();
+
+    // 子自己的轮次输出带 [sub]，与父/装配层输出区分
+    expect(logs.some((line) => line.includes("[sub] 🔧 第 1 轮"))).toBe(true);
+    expect(logs.some((line) => line.includes("[sub]    > echo"))).toBe(true);
+    // 边界标记仍是装配层输出（无前缀）
+    expect(logs.some((line) => line.includes("[Subagent started]"))).toBe(true);
+  });
 });
