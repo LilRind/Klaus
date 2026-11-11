@@ -58,3 +58,6 @@ __pycache__/
 # s13 Agent Teams 运行时产物
 .mailboxes/
 .worktrees/
+
+# s16 Workflow Runtime 运行时产物
+.runtime/

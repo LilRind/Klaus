@@ -9,7 +9,8 @@
  * 层级表：s01–s03 base（文件四件套+bash+权限；三章差异已固化在框架层，
  * 装配层等价）→ s04 hooks → s05 todo → s06 task → s07 skills →
  * s08 compact → s09 memory → s10 任务图 → s11 后台任务 → s12 cron →
- * s13 任务板/worktree/teammate → s14 MCP。默认 s14 全量。
+ * s13 任务板/worktree/teammate → s14 MCP → s15 integrated harness →
+ * s16 workflow runtime（review-changes 样例编排）。默认最新章全量。
  */
 
 import "dotenv/config";
@@ -65,6 +66,11 @@ import {
   LlmRecovery,
   HarnessLoop,
   AsyncEventLoop,
+  WorkflowRegistry,
+  WorkflowRuntime,
+  LlmWorkflowAgentRunner,
+  WorkflowTool,
+  type ExecutionState,
   type ApprovalPrompt,
   type ChatLLM,
   type Tool,
@@ -72,7 +78,7 @@ import {
 } from "../../src/index";
 import { Message } from "../../src/core/message";
 
-export const MAX_ALIGNMENT_STAGE = 15;
+export const MAX_ALIGNMENT_STAGE = 16;
 
 export interface AlignmentAssemblyOptions {
   /** 工作区根目录（工具围栏放开，越区裁决权交给权限层） */
@@ -101,6 +107,115 @@ export interface AlignmentAssemblyFeatures {
   teams: boolean; // s13+
   mcp: boolean; // s14+
   integratedHarness: boolean; // s15+
+  workflow: boolean; // s16+
+}
+
+// ---------- s16：review-changes 样例 workflow（对齐 lcc SAMPLE_META / sample_workflow） ----------
+
+const FINDINGS_SCHEMA = {
+  type: "object",
+  required: ["findings"],
+  properties: {
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["title", "severity"],
+        properties: {
+          title: { type: "string" },
+          severity: { type: "string", enum: ["high", "medium", "low"] },
+        },
+      },
+    },
+  },
+} as const;
+
+const VERDICT_SCHEMA = {
+  type: "object",
+  required: ["isReal", "reason"],
+  properties: { isReal: { type: "boolean" }, reason: { type: "string" } },
+} as const;
+
+const REVIEW_DIMENSIONS = ["correctness", "security", "performance", "style"];
+
+interface ReviewFinding {
+  title: string;
+  severity: string;
+}
+
+/**
+ * lcc 样例编排的逐字移植：pipeline 让每个审查维度独立走
+ * "审计 → 对抗验证"——stage 间无屏障，item 间并发。计划是代码，
+ * 不是靠聊天一轮轮凑。
+ */
+async function reviewChangesWorkflow(
+  ctx: ExecutionState,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  ctx.phase("Review");
+  const changes = typeof args.changes === "string" ? args.changes : "";
+  const reviewInput = changes.trim() || "No change context was supplied.";
+
+  const audit = async (
+    _previous: unknown,
+    dimension: string,
+    _index: number,
+  ): Promise<{ dimension: string; findings: ReviewFinding[] }> => {
+    const out = (await ctx.agent(
+      `Review this change context for ${dimension} issues. ` +
+        "Report only issues supported by the supplied text.\n\n" +
+        reviewInput,
+      FINDINGS_SCHEMA,
+      `audit:${dimension}`,
+      "Review",
+    )) as { findings: ReviewFinding[] };
+    return { dimension, findings: out.findings };
+  };
+
+  const verify = async (
+    previous: unknown,
+    dimension: string,
+    _index: number,
+  ): Promise<{ dimension: string; confirmed: ReviewFinding[] }> => {
+    const audited = previous as { dimension: string; findings: ReviewFinding[] };
+    ctx.phase("Verify");
+    const verdicts = await ctx.parallel(
+      audited.findings.map(
+        (finding) => () =>
+          ctx.agent(
+            `Adversarially verify this ${dimension} finding against the ` +
+              "supplied change context.\n\n" +
+              `Change context:\n${reviewInput}\n\n` +
+              `Finding:\n${JSON.stringify(finding)}`,
+            VERDICT_SCHEMA,
+            `verify:${dimension}:${finding.title}`,
+            "Verify",
+          ),
+      ),
+    );
+    const confirmed = audited.findings.filter((_finding, i) => {
+      const verdict = verdicts[i] as { isReal?: boolean } | undefined;
+      return verdict?.isReal === true;
+    });
+    return { dimension, confirmed };
+  };
+
+  const results = await ctx.pipeline(REVIEW_DIMENSIONS, audit, verify);
+  const severityRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const confirmed = results
+    .flatMap((result) => {
+      const { dimension, confirmed: items } = result as {
+        dimension: string;
+        confirmed: ReviewFinding[];
+      };
+      return items.map((finding) => ({ dimension, ...finding }));
+    })
+    .sort(
+      (a, b) =>
+        (severityRank[a.severity] ?? 3) - (severityRank[b.severity] ?? 3),
+    );
+  ctx.log(`confirmed ${confirmed.length} real finding(s)`);
+  return { confirmed };
 }
 
 export interface AlignmentAssembly {
@@ -120,6 +235,8 @@ export interface AlignmentAssembly {
   asyncEventLoop?: AsyncEventLoop;
   /** s14+：MCP 连接管理器（测试观测点） */
   mcp?: McpConnectionManager;
+  /** s16+：workflow runtime（测试观测点：注册表与样例编排） */
+  workflow?: WorkflowRuntime;
   /** s09+：system prompt 构建器（测试观测点） */
   buildSystemPrompt?: (input: string) => Promise<string>;
   /** 收尾：清理后台进程树（<s11 时 no-op；durable cron 保留） */
@@ -351,6 +468,29 @@ export async function buildAlignmentAgent(
     registry.setDynamicToolProvider(() => mcpManager!.assembleTools(builtinToolNames));
     dynamicTools = true;
   }
+  // ---------- s16：workflow runtime（宿主持有可信编排，模型只报名字） ----------
+  let workflowRuntime: WorkflowRuntime | undefined;
+  if (has(16)) {
+    const workflowRegistry = new WorkflowRegistry();
+    workflowRegistry.register(
+      {
+        name: "review-changes",
+        description:
+          "Review changed files across dimensions, verify each finding",
+        phases: ["Review", "Verify"],
+      },
+      reviewChangesWorkflow,
+    );
+    workflowRuntime = new WorkflowRuntime({
+      storeDir: path.join(workspace, ".runtime"),
+      registry: workflowRegistry,
+      // workflow 子 agent 与宿主同一 ChatLLM（lcc install 选 API runner 同思路）
+      runner: () => new LlmWorkflowAgentRunner(llm),
+      onEvent: (line) => console.log(`  [workflow] ${line}`),
+    });
+    registry.register(new WorkflowTool(workflowRuntime));
+    builtinToolNames.push("Workflow");
+  }
   if (taskTool) registry.register(taskTool);
   registry.setPermissionChecker(permissionChecker).assertAllStructured();
 
@@ -516,6 +656,7 @@ export async function buildAlignmentAgent(
       teams: has(13),
       mcp: has(14),
       integratedHarness: has(15),
+      workflow: has(16),
     },
     pumpCron: async () => {
       if (!cronScheduler) return;
@@ -532,6 +673,7 @@ export async function buildAlignmentAgent(
     ...(harnessLoop ? { harnessLoop } : {}),
     ...(asyncEventLoop ? { asyncEventLoop } : {}),
     ...(mcpManager ? { mcp: mcpManager } : {}),
+    ...(workflowRuntime ? { workflow: workflowRuntime } : {}),
     ...(systemPromptBuilder ? { buildSystemPrompt: systemPromptBuilder } : {}),
     dispose: async () => {
       asyncEventLoop?.stop();
@@ -590,4 +732,6 @@ export const ALIGNMENT_PROMPTS: [string, string][] = [
   ["s15", "Schedule a one-off task 2 minutes from now that runs `node -e \"console.log('cron-ok')\"`（REPL 空闲时观察自动唤醒交付与 [Scheduled] 注入）"],
   ["s15", "Run a 2-second background task (use run_in_background), then stay idle and wait（REPL 空闲时观察后台完成自动唤醒与 <task_notification> 注入）"],
   ["s15", "Spawn a teammate and send it a message asking for a short README summary（观察团队事件自动唤醒一轮）"],
+  ["s16", "Run the saved workflow named review-changes with args {\"changes\": \"def load_user(id): return db.execute(f'SELECT * FROM users WHERE id = {id}')\"}（观察一次 tool_use 内 launched→workflow_phase→task_notification 事件流与 .runtime/ 产物）"],
+  ["s16", "Resume the previous review-changes run using the runId from the earlier result（观察全部 status=cached、agents=0 tokens=0）"],
 ];
