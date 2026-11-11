@@ -66,6 +66,7 @@ import {
   LlmRecovery,
   HarnessLoop,
   AsyncEventLoop,
+  MAX_RETRIES,
   WorkflowRegistry,
   WorkflowRuntime,
   LlmWorkflowAgentRunner,
@@ -375,6 +376,18 @@ export async function buildAlignmentAgent(
         ...(fallbackModelId
           ? { fallback: new OpenAICompatLLM({ model: fallbackModelId }) }
           : {}),
+        // 限流/过载重试的控制台可观测性（对齐 lcc with_retry 的 [429]/[529] 打印）
+        onRetry: ({ kind, attempt, delayMs, switchedToFallback }) => {
+          const tag = kind === "rate_limited" ? "429" : "529";
+          if (switchedToFallback) {
+            console.warn(
+              `\n⚠️ [529] 连续过载，切换降级模型（FALLBACK_MODEL_ID=${fallbackModelId}）`,
+            );
+          }
+          console.warn(
+            `⚠️ [${tag}] retry ${attempt}/${MAX_RETRIES} after ${(delayMs / 1000).toFixed(1)}s`,
+          );
+        },
       })
     : undefined;
 
