@@ -1,4 +1,4 @@
-# HelloAgents-TS
+# Klaus
 
 《Hello Agents》第 7 章「构建你的智能体框架」、第 8 章「记忆与检索」与第 9 章「上下文工程」的 TypeScript 从零实现。
 练习原书：[datawhalechina/Hello-Agents](https://github.com/datawhalechina/Hello-Agents)（框架原版参考：[jjyaoao/helloagents](https://github.com/jjyaoao/helloagents)）。
