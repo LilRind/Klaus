@@ -21,6 +21,7 @@ export type TraceEventType =
   | "tool_call" // 模型发起一次工具调用（PreToolUse 位置）
   | "tool_result" // 工具结果回喂（含 ⛔ 权限拒绝——拒绝也是 observation）
   | "hook" // s04 四挂点触发（UserPromptSubmit/PreToolUse/PostToolUse/Stop）
+  | "compaction" // s08 上下文压缩/补救（触发阶段、规模变化与恢复产物）
   | "loop_end" // 模型未再调用工具，循环自然结束
   | "forced_final" // 达到最大轮数，强制文本收尾
   | "run_end"; // 最终回答返回
@@ -44,6 +45,15 @@ export interface TraceEvent {
   hookEvent?: string;
   /** hook 事件附带的摘要（如拦截原因 / 输出规模 / 工具数统计） */
   detail?: string;
+  /** s08 压缩阶段：toolResultBudget / snipCompact / ... / reactiveCompact */
+  compactionStage?: string;
+  /** 压缩前后的消息数与字符估算（事后判断触发强度） */
+  beforeMessages?: number;
+  afterMessages?: number;
+  beforeChars?: number;
+  afterChars?: number;
+  /** 本次压缩新增的 transcript / full output 文件 */
+  artifacts?: string[];
 }
 
 /** md 转录里长文本的截断上限 */
@@ -178,6 +188,30 @@ function renderMarkdown(event: TraceEvent): string {
         "",
       );
       break;
+    case "compaction": {
+      const scale =
+        event.beforeMessages !== undefined && event.afterMessages !== undefined
+          ? `${event.beforeMessages}→${event.afterMessages} messages`
+          : "";
+      const chars =
+        event.beforeChars !== undefined && event.afterChars !== undefined
+          ? `${event.beforeChars}→${event.afterChars} chars`
+          : "";
+      lines.push(
+        `### ${time} 🗜 compaction · ${event.compactionStage ?? "?"}`,
+        "",
+        `- scale: ${[scale, chars].filter(Boolean).join(" · ")}`,
+        ...(event.detail ? ["", `- messages: ${clip(event.detail)}`] : []),
+        ...(event.durationMs !== undefined
+          ? [`- duration: ${event.durationMs}ms`]
+          : []),
+        ...(event.artifacts?.length
+          ? ["- artifacts:", ...event.artifacts.map((path) => `  - ${path}`)]
+          : []),
+        "",
+      );
+      break;
+    }
     case "loop_end":
       lines.push(
         `## ${time} ✔ 循环结束（共 ${event.rounds ?? "?"} 轮模型调用）`,

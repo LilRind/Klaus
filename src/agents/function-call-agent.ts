@@ -272,7 +272,7 @@ export class FunctionCallAgent extends Agent {
 
       let result;
       try {
-        result = await this.invokeModel(conversation, tools, input ?? "");
+        result = await this.invokeModel(conversation, tools, activeRequest);
       } catch (error) {
         // s15 对齐 lcc 3178-3182：最终失败 → restore 未 ack 的 cron，
         // 追加 [Error] assistant 消息留痕，再抛给调用方

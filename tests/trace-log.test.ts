@@ -88,6 +88,38 @@ describe("AgentTraceLog 双格式落盘", () => {
     expect(events[1]?.session).toBe(events[0]?.session);
   });
 
+  it("compaction 事件同时写 JSONL 与 Markdown", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "trace-compact-"));
+    tempDirs.push(dir);
+    const log = new AgentTraceLog("agent-compact", dir);
+
+    await log.emit({
+      type: "compaction",
+      compactionStage: "compactHistory",
+      detail: "[Compacted] Current user request: finish task",
+      beforeMessages: 12,
+      afterMessages: 1,
+      beforeChars: 58_000,
+      afterChars: 1_200,
+      durationMs: 18,
+      artifacts: [join(dir, "transcript.json")],
+    });
+
+    const events = await log.readDay();
+    expect(events).toHaveLength(1);
+    expect(events[0]?.compactionStage).toBe("compactHistory");
+    expect(events[0]?.artifacts).toEqual([join(dir, "transcript.json")]);
+
+    const md = await readFile(
+      join(dir, `agent-compact-${new Date().toISOString().slice(0, 10)}.md`),
+      "utf8",
+    );
+    expect(md).toContain("🗜 compaction · compactHistory");
+    expect(md).toContain("scale: 12→1 messages · 58000→1200 chars");
+    expect(md).toContain("messages: [Compacted]");
+    expect(md).toContain("- duration: 18ms");
+  });
+
   it("md 转录默认开启：可读块与 jsonl 同目录同名", async () => {
     const dir = await mkdtemp(join(tmpdir(), "trace-md-"));
     tempDirs.push(dir);
