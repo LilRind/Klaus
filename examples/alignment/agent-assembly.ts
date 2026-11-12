@@ -44,6 +44,7 @@ import {
   CompactTool,
   ContextCompactor,
   listMemoryFiles,
+  readMemoryIndex,
   selectRelevantMemories,
   loadMemories,
   buildMemorySystem,
@@ -553,6 +554,9 @@ export async function buildAlignmentAgent(
     ? async (input: string): Promise<string> => {
         const records = await listMemoryFiles(memoryDir);
         const selected = await selectRelevantMemories(llm, [Message.user(input)], records);
+        // s09 对齐 lcc build_system：system 常驻完整 Memory catalog，召回选错时
+        // 模型仍能从 catalog 行看到已存事实
+        const memoryCatalog = (await readMemoryIndex(memoryDir)) ?? "";
         const withSkills = skillLoader
           ? buildSkillSystemPrompt(baseInstructions, skillLoader)
           : baseInstructions;
@@ -561,7 +565,10 @@ export async function buildAlignmentAgent(
           has(15) && mcpManager && mcpManager.connectedNames().length > 0
             ? `\n\nConnected MCP servers: ${mcpManager.connectedNames().join(", ")}`
             : "";
-        return buildMemorySystem(withSkills, loadMemories(selected)) + mcpSection;
+        return (
+          buildMemorySystem(withSkills, loadMemories(selected), memoryCatalog) +
+          mcpSection
+        );
       }
     : undefined;
 
@@ -623,9 +630,15 @@ export async function buildAlignmentAgent(
             const written = await extractMemories(llm, history, memoryDir);
             if (written > 0) {
               console.log(`[memory] 新增 ${written} 条持久记忆（.memory/）`);
-              await consolidateMemories(llm, { memoryDir }).catch((error) => {
-                console.warn(`[memory] 整理失败（不影响答案）: ${error}`);
-              });
+              const consolidated = await consolidateMemories(llm, { memoryDir }).catch(
+                (error) => {
+                  console.warn(`[memory] 整理跳过/失败（不影响答案）: ${error}`);
+                  return 0;
+                },
+              );
+              if (consolidated > 0) {
+                console.log(`[memory] 整理完成：保留 ${consolidated} 条`);
+              }
             }
           },
         }

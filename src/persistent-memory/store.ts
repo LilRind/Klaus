@@ -20,15 +20,27 @@ export type MemoryType = (typeof MEMORY_TYPES)[number];
 /** 候选里出现这些短语 → 临时信息，不该跨会话保留（对齐 s09 TEMPORARY_MEMORY_MARKERS） */
 export const TEMPORARY_MEMORY_MARKERS = [
   "this session",
+  "current session",
+  "this turn",
+  "current turn",
+  "this task",
   "current task",
   "for now",
   "just this once",
+  "today only",
   "temporary",
   "本次会话",
+  "当前会话",
+  "这一轮",
+  "当前轮次",
+  "本次任务",
   "当前任务",
   "这次任务",
   "暂时",
   "临时",
+  "今回だけ",
+  "このセッション",
+  "現在のタスク",
 ] as const;
 
 export const MEMORY_INDEX_NAME = "MEMORY.md";
@@ -149,9 +161,9 @@ export async function listMemoryFiles(memoryDir: string): Promise<MemoryRecord[]
     const { metadata, body } = parseFrontmatter(content);
     if (!isMemoryType(metadata.type)) continue;
     records.push({
-      name: metadata.name?.trim() || filename.replace(/\.md$/, ""),
+      name: collapseWhitespace(metadata.name) || filename.replace(/\.md$/, ""),
       type: metadata.type,
-      description: metadata.description?.trim() || "",
+      description: collapseWhitespace(metadata.description) || "",
       body: body.trim(),
       filename,
     });
@@ -171,17 +183,27 @@ export async function readMemoryFile(
   }
 }
 
-/** 由文件重建 MEMORY.md 索引（写入后以文件为唯一事实源） */
+/** 折叠连续空白（对齐 LCC " ".join(value.split()) 的索引行口径） */
+function collapseWhitespace(value: unknown): string {
+  return typeof value === "string" ? value.split(/\s+/).filter(Boolean).join(" ").trim() : "";
+}
+
+/** 由文件重建 MEMORY.md 索引（写入后以文件为唯一事实源；行格式对齐 LCC） */
 export async function rebuildMemoryIndex(memoryDir: string): Promise<string> {
   const records = await listMemoryFiles(memoryDir);
   const lines = records.map(
-    (record) => `- ${record.name} (${record.type}): ${record.description} — ${record.filename}`,
+    (record) => {
+      const description =
+        record.description ||
+        collapseWhitespace(record.body.split(/\r?\n/).find((line) => line.trim()) ?? "");
+      return `- [${record.name}](${record.filename}) - ${description}`;
+    },
   );
   const index = memoryPath(memoryDir, MEMORY_INDEX_NAME);
   await fs.mkdir(path.resolve(memoryDir), { recursive: true });
   await fs.writeFile(
     index,
-    lines.length > 0 ? `# Memory Index\n\n${lines.join("\n")}\n` : "# Memory Index\n\n(empty)\n",
+    lines.length > 0 ? `${lines.join("\n")}\n` : "",
     "utf8",
   );
   return index;
@@ -202,11 +224,18 @@ export function containsTemporaryMarker(text: string): boolean {
   return TEMPORARY_MEMORY_MARKERS.some((marker) => lower.includes(marker));
 }
 
+/** 空白归一化比较文本（对齐 LCC _normalized_memory_text） */
+function normalizedMemoryText(value: string): string {
+  return value.toLowerCase().split(/\s+/).join(" ").trim();
+}
+
 /**
  * 入库终审（对齐 s09 should_store_memory）：
  * - 字段不完整 / type 非法 → 拒绝；
- * - description 或 body 带临时含义（"本次会话别建文件"之类）→ 拒绝；
- * - 与已有记忆重名（slug 相同）或 description 相同 → 视为重复拒绝。
+ * - name/description/body 拼接文本带临时含义（"本次会话别建文件"之类）→ 拒绝；
+ * - 与已有记忆重名（slug 相同）或 description/body 归一化后相同
+ *   → 视为重复拒绝（对齐 LCC should_store_memory：slug / description / body
+ *   三层精确去重；改写重复交给 consolidate 在阈值后合并，不做模糊匹配）。
  */
 export function shouldStoreMemory(
   candidate: MemoryCandidate,
@@ -218,12 +247,17 @@ export function shouldStoreMemory(
   } catch {
     return false;
   }
-  if (containsTemporaryMarker(record.description) || containsTemporaryMarker(record.body)) {
+  if (
+    containsTemporaryMarker(`${record.name}\n${record.description}\n${record.body}`)
+  ) {
     return false;
   }
   const slug = memorySlug(record.name);
-  return !existing.some(
-    (memory) =>
-      memorySlug(memory.name) === slug || memory.description === record.description,
-  );
+  const description = normalizedMemoryText(record.description);
+  const body = normalizedMemoryText(record.body);
+  return !existing.some((memory) => {
+    if (memorySlug(memory.name) === slug) return true;
+    if (normalizedMemoryText(memory.description) === description) return true;
+    return normalizedMemoryText(memory.body) === body;
+  });
 }
