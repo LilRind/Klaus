@@ -13,6 +13,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { parseFrontmatter } from "../skills/skill-loader";
+import { MemoryConsolidationError } from "../core/exceptions";
 
 export const MEMORY_TYPES = ["user", "feedback", "project", "reference"] as const;
 export type MemoryType = (typeof MEMORY_TYPES)[number];
@@ -47,6 +48,14 @@ export const MEMORY_INDEX_NAME = "MEMORY.md";
 export const RECALL_CHAR_LIMIT = 20_000;
 export const CONSOLIDATE_THRESHOLD = 10;
 export const CONSOLIDATE_INPUT_CHAR_LIMIT = 20_000;
+
+/** 坏 type 文件的去重警告缓存：每进程每 (dir, filename) 只警告一次 */
+const skippedMemoryWarned = new Set<string>();
+
+/** 测试隔离用：清空跳过警告的去重缓存 */
+export function resetSkippedMemoryWarnings(): void {
+  skippedMemoryWarned.clear();
+}
 
 /** 从文件读出的完整记录 */
 export interface MemoryRecord {
@@ -159,7 +168,18 @@ export async function listMemoryFiles(memoryDir: string): Promise<MemoryRecord[]
     const content = await readMemoryFile(memoryDir, filename);
     if (content === null) continue;
     const { metadata, body } = parseFrontmatter(content);
-    if (!isMemoryType(metadata.type)) continue;
+    if (!isMemoryType(metadata.type)) {
+      // 跳过本身保持静默语义（不参与管线、文件不动），但要让用户与
+      // agent 都能看见"有一条记忆被排除在外"——去重避免每回合刷屏
+      const dedupeKey = `${path.resolve(memoryDir)}:${filename}`;
+      if (!skippedMemoryWarned.has(dedupeKey)) {
+        skippedMemoryWarned.add(dedupeKey);
+        console.warn(
+          `[memory] 跳过非法 type 的记忆文件（不参与召回/整理，文件保留）: ${filename} (type=${String(metadata.type ?? "缺失")})`,
+        );
+      }
+      continue;
+    }
     records.push({
       name: collapseWhitespace(metadata.name) || filename.replace(/\.md$/, ""),
       type: metadata.type,

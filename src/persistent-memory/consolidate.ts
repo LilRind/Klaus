@@ -9,6 +9,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { ChatLLM } from "../core/llm";
+import { MemoryConsolidationError } from "../core/exceptions";
 import {
   MEMORY_INDEX_NAME,
   CONSOLIDATE_THRESHOLD,
@@ -54,7 +55,10 @@ export async function consolidateMemories(
     )
     .join("\n\n");
   if (catalog.length > inputLimit) {
-    throw new Error("memory store is too large for one consolidation pass");
+    throw new MemoryConsolidationError(
+      "TOO_LARGE",
+      "memory store is too large for one consolidation pass",
+    );
   }
 
   // 对齐 LCC prompt：数据声明 + 合并/纠偏/去旧 + 至多 30 条；max_tokens=3000
@@ -72,11 +76,17 @@ export async function consolidateMemories(
   ], { maxTokens: 3000 });
   const parsed = extractJsonArray(output);
   if (parsed === null) {
-    throw new Error("记忆整理输出不是合法 JSON 数组");
+    throw new MemoryConsolidationError(
+      "INVALID_OUTPUT",
+      "记忆整理输出不是合法 JSON 数组",
+    );
   }
   const consolidated = parsed.map((raw) => {
     if (!raw || typeof raw !== "object") {
-      throw new Error("记忆整理输出包含非对象条目");
+      throw new MemoryConsolidationError(
+        "INVALID_OUTPUT",
+        "记忆整理输出包含非对象条目",
+      );
     }
     return validateMemoryRecord(raw as Record<string, unknown>);
   });
@@ -84,10 +94,16 @@ export async function consolidateMemories(
   // 对齐 LCC：空结果 / 重复 slug 都在替换前拒绝（防清库 / 覆盖丢数据）
   const slugs = consolidated.map((record) => memorySlug(record.name));
   if (consolidated.length === 0) {
-    throw new Error("consolidation returned empty records");
+    throw new MemoryConsolidationError(
+      "EMPTY",
+      "consolidation returned empty records",
+    );
   }
   if (new Set(slugs).size !== slugs.length) {
-    throw new Error("consolidation returned duplicate records");
+    throw new MemoryConsolidationError(
+      "DUPLICATE",
+      "consolidation returned duplicate records",
+    );
   }
 
   // 快照 → 替换 → 失败恢复（对齐 s09 的快照回滚）

@@ -21,6 +21,7 @@ import {
   rebuildMemoryIndex,
   readMemoryIndex,
   shouldStoreMemory,
+  resetSkippedMemoryWarnings,
 } from "../src/persistent-memory/store";
 import {
   extractJsonArray,
@@ -32,6 +33,7 @@ import {
 } from "../src/persistent-memory/recall";
 import { extractMemories } from "../src/persistent-memory/extract";
 import { consolidateMemories } from "../src/persistent-memory/consolidate";
+import { MemoryConsolidationError } from "../src/core/exceptions";
 import { FunctionCallAgent } from "../src/agents/function-call-agent";
 import { ToolRegistry } from "../src/tools/registry";
 import { Message } from "../src/core/message";
@@ -100,11 +102,26 @@ describe("存储层（store）", () => {
     ).toThrow(/description/);
   });
 
-  it("非法文件被列出时跳过；空目录索引为空（对齐 LCC 无表头索引）", async () => {
+  it("非法 type 文件跳过时 warn 去重（每文件每进程一次）；空目录索引为空", async () => {
     const dir = await makeMemoryDir();
+    const warnings: unknown[][] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args);
     await fs.writeFile(path.join(dir, "bad.md"), "---\nname: x\ntype: dream\n---\nbody", "utf8");
-    await fs.writeFile(path.join(dir, "notes.txt"), "not markdown", "utf8");
-    expect(await listMemoryFiles(dir)).toHaveLength(0);
+    try {
+      await fs.writeFile(path.join(dir, "notes.txt"), "not markdown", "utf8");
+      expect(await listMemoryFiles(dir)).toHaveLength(0);
+      expect(await listMemoryFiles(dir)).toHaveLength(0);
+      expect(warnings).toHaveLength(1);
+      expect(String(warnings[0]?.[0])).toContain("bad.md");
+      expect(String(warnings[0]?.[0])).toContain("dream");
+
+      resetSkippedMemoryWarnings();
+      await listMemoryFiles(dir);
+      expect(warnings).toHaveLength(2);
+    } finally {
+      console.warn = warn;
+    }
 
     await rebuildMemoryIndex(dir);
     expect(await readMemoryIndex(dir)).toBe("");
@@ -321,6 +338,7 @@ describe("召回（recall）", () => {
     const block = loadMemories(long, 500);
     const parsed = JSON.parse(block) as { source: string; content: string }[];
     expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed[0]?.content).toMatch(/^type: user\n/);
     const contentLength = parsed.reduce((sum, item) => sum + item.content.length, 0);
     expect(contentLength).toBeLessThanOrEqual(500);
     expect(parsed[0]?.source).toBe(long[0]!.filename);
@@ -510,9 +528,12 @@ describe("整理（consolidate）", () => {
     const dir = await makeMemoryDir();
     await seed(dir, 10);
     const llm = new ScriptedLLM(["not json"]);
-    await expect(
-      consolidateMemories(llm, { memoryDir: dir }),
-    ).rejects.toThrow(/JSON 数组/);
+    const error: unknown = await consolidateMemories(llm, {
+      memoryDir: dir,
+    }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(MemoryConsolidationError);
+    expect((error as MemoryConsolidationError).code).toBe("INVALID_OUTPUT");
+    expect((error as Error).message).toMatch(/JSON 数组/);
     expect(await listMemoryFiles(dir)).toHaveLength(10);
   });
 
@@ -520,9 +541,13 @@ describe("整理（consolidate）", () => {
     const dir = await makeMemoryDir();
     await seed(dir, 10);
     const llm = new ScriptedLLM([]);
-    await expect(
-      consolidateMemories(llm, { memoryDir: dir, inputCharLimit: 10 }),
-    ).rejects.toThrow(/too large/);
+    const error: unknown = await consolidateMemories(llm, {
+      memoryDir: dir,
+      inputCharLimit: 10,
+    }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(MemoryConsolidationError);
+    expect((error as MemoryConsolidationError).code).toBe("TOO_LARGE");
+    expect((error as Error).message).toMatch(/too large/);
     expect(llm.invokeCount).toBe(0);
     expect(await listMemoryFiles(dir)).toHaveLength(10);
   });
@@ -530,9 +555,12 @@ describe("整理（consolidate）", () => {
   it("整理结果为空 / 含重复 slug：替换前拒绝，原记忆不丢", async () => {
     const empty = await makeMemoryDir();
     await seed(empty, 10);
-    await expect(
-      consolidateMemories(new ScriptedLLM(["[]"]), { memoryDir: empty }),
-    ).rejects.toThrow(/empty/);
+    const error: unknown = await consolidateMemories(new ScriptedLLM(["[]"]), {
+      memoryDir: empty,
+    }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(MemoryConsolidationError);
+    expect((error as MemoryConsolidationError).code).toBe("EMPTY");
+    expect((error as Error).message).toMatch(/empty/);
     expect(await listMemoryFiles(empty)).toHaveLength(10);
 
     const dup = await makeMemoryDir();
@@ -541,9 +569,13 @@ describe("整理（consolidate）", () => {
       { name: "same", type: "user", description: "d1", body: "b1" },
       { name: "Same", type: "user", description: "d2", body: "b2" },
     ]);
-    await expect(
-      consolidateMemories(new ScriptedLLM([duplicated]), { memoryDir: dup }),
-    ).rejects.toThrow(/duplicate/);
+    const dupError: unknown = await consolidateMemories(
+      new ScriptedLLM([duplicated]),
+      { memoryDir: dup },
+    ).catch((caught) => caught);
+    expect(dupError).toBeInstanceOf(MemoryConsolidationError);
+    expect((dupError as MemoryConsolidationError).code).toBe("DUPLICATE");
+    expect((dupError as Error).message).toMatch(/duplicate/);
     expect(await listMemoryFiles(dup)).toHaveLength(10);
   });
 });
@@ -624,5 +656,6 @@ describe("跨会话召回（Agent 集成，README 场景 1+2）", () => {
     }
   });
 });
+
 
 

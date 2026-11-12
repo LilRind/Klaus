@@ -132,7 +132,10 @@ export function loadMemories(
   let used = 0;
   for (const record of selected) {
     if (remaining() <= 0) break;
-    const content = `${record.description}\n\n${record.body}`.slice(0, remaining());
+    // type 行回注（对齐 LCC 原文 frontmatter 里的 type: 行）——类型标签对
+    // 模型区分偏好/反馈/项目事实有用，不属于可去噪的装饰
+    const content =
+      `type: ${record.type}\n${record.description}\n\n${record.body}`.slice(0, remaining());
     if (!content) continue;
     loaded.push({ source: record.filename, content });
     used += content.length;

@@ -43,6 +43,22 @@ export class ToolExecutionError extends AgentError {
 /** Agent 循环超过最大步数仍未 Finish */
 export class MaxStepsExceededError extends AgentError {}
 
+/** 记忆整理失败的分类错误：调用方按 code 精确分支，不必正则匹配消息 */
+export type MemoryConsolidationErrorCode =
+  | "TOO_LARGE" // 目录超过单次整理输入上限（LCC：跳过整理，一字不动）
+  | "EMPTY" // LLM 返回空数组（整体替换会清库，替换前拒绝）
+  | "DUPLICATE" // LLM 返回重复 slug（同名覆盖丢记忆，替换前拒绝）
+  | "INVALID_OUTPUT"; // 输出不是合法 JSON 数组 / 含非法记录
+
+export class MemoryConsolidationError extends AgentError {
+  constructor(
+    readonly code: MemoryConsolidationErrorCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 function errorMessage(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
   return String(cause);
