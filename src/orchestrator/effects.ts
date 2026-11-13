@@ -16,13 +16,15 @@ import type { EffectRow, OrchestrationStore } from "./store";
 /** handler 抛出表示"现在不行"（如无空闲 worker 槽）：重排不计失败。 */
 export class Later extends Error {}
 
-export type EffectKind = "launch" | "reply";
+export type EffectKind = "launch" | "reply" | "deliver";
 
 export interface EffectPayloads {
-  /** 启动一个 pending assignment；key = ticketId。 */
-  launch: { ticketId: string; assignmentId: string };
+  /** 启动一个 pending assignment；key = ticketId；recovery = 进程重启后的续跑。 */
+  launch: { ticketId: string; assignmentId: string; recovery?: boolean };
   /** 投递一条 outbox 消息到 sink（REPL 打印）；key = 消息 id。 */
   reply: { messageId: string };
+  /** 向 blocked worker 追加对话轮（answer）；key = ticketId，texts 按到达顺序累积。 */
+  deliver: { ticketId: string; texts: string[] };
 }
 
 export type EffectHandler<K extends EffectKind> = (

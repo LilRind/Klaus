@@ -49,8 +49,13 @@ export interface WorkerReport {
 
 export type AssignmentStatus = "pending" | "running" | "ended";
 
-/** 恰一终态且不可撤销（clowder 不变量；批 2 增加 interrupted 恢复合成态）。 */
-export type AssignmentOutcome = "completed" | "failed" | "dropped" | "stopped";
+/** 恰一终态且不可撤销（clowder 不变量）；interrupted = 进程重启对账（批 2）。 */
+export type AssignmentOutcome =
+  | "completed"
+  | "failed"
+  | "dropped"
+  | "stopped"
+  | "interrupted";
 
 export interface AssignmentEnded {
   outcome: AssignmentOutcome;
@@ -86,6 +91,8 @@ export interface Ticket {
   /** 当前（首个）assignment 的 id。 */
   assignmentId?: string;
   attention?: Attention;
+  /** 被进程重启打断的次数（批 2 恢复上限依据）。 */
+  interruptions?: number;
   ended?: TicketEnded;
 }
 

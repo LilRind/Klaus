@@ -90,6 +90,13 @@ async function main(): Promise<void> {
     },
   });
 
+  if (orchestrator.recovery && orchestrator.recovery.relaunched.length > 0) {
+    console.log(
+      `[恢复] ${orchestrator.recovery.relaunched.length} 张被打断的工单已接档续跑；` +
+        `${orchestrator.recovery.failedByLimit.length} 张熔断。`,
+    );
+  }
+
   const timer = setInterval(() => {
     orchestrator.pump().catch((error) => {
       console.error(`[effects] 泵失败：${String(error)}`);
@@ -125,6 +132,7 @@ async function main(): Promise<void> {
       console.log("  status      三问：什么在等你 / 在跑什么 / 哪里坏了");
       console.log("  tickets     工单列表");
       console.log("  stop <id> <原因>  停止一张工单");
+      console.log("  answer <id> <回答> 回答工单的待决问题");
       console.log("  exit        退出");
       continue;
     }
@@ -139,6 +147,24 @@ async function main(): Promise<void> {
         await orchestrator.pump();
       } catch (error) {
         console.error(`停止失败：${String(error)}`);
+      }
+      continue;
+    }
+    if (line.startsWith("answer ")) {
+      const rest = line.slice(7).trim();
+      const spaceAt = rest.indexOf(" ");
+      const ticketId = spaceAt < 0 ? rest : rest.slice(0, spaceAt);
+      const answer = spaceAt < 0 ? "" : rest.slice(spaceAt + 1).trim();
+      if (!ticketId || !answer) {
+        console.log("用法：answer <票id> <回答内容>");
+        continue;
+      }
+      try {
+        orchestrator.answer(ticketId, answer);
+        console.log(`已送达 ${ticketId}，worker 将在下一轮收到。`);
+        await orchestrator.pump();
+      } catch (error) {
+        console.error(`回答失败：${String(error)}`);
       }
       continue;
     }

@@ -145,7 +145,7 @@ describe("assignmentPrompt / defaultAgentFactory", () => {
       createdAt: NOW,
     });
     expect(prompt).toContain("边界：S");
-    expect(prompt).toContain("不等待人工");
+    expect(prompt).toContain("NEEDS_DECISION");
   });
 
   it("默认工厂产出 FunctionCallAgent（file 四件套锁定工位目录）", () => {

@@ -58,10 +58,23 @@ export interface EngineSnapshot {
   outbox: OutboxMessage[];
 }
 
+/** 批 2 启动对账摘要：被打断 / 已续跑 / 因超上限熔断的票。 */
+export interface RecoverySummary {
+  interrupted: string[];
+  relaunched: string[];
+  failedByLimit: string[];
+}
+
+/**
+ * 每票中断续跑上限（超过熔断为 failed）。来源：dsh 的"连续失败阈值"惯例
+ * （FAILURES_BEFORE_ERROR=3 / TRANSIENT_TRIES=3 / REQUEUES=2），应用于 restart 场景。
+ */
+export const RECOVERY_LIMIT = 3;
+
 /** REPL 角色：提交/判定/停止/查看。 */
 export type EngineForRepl = Pick<
   Engine,
-  "receive" | "decide" | "stopTicket" | "status" | "snapshot"
+  "receive" | "decide" | "stopTicket" | "answerAttention" | "status" | "snapshot"
 >;
 /** worker 角色：只报事实（assignmentStarted / report），拿不到 decide/stop。 */
 export type EngineForExecutor = Pick<Engine, "assignmentStarted" | "report">;
@@ -151,6 +164,54 @@ export class Engine {
 
   // ---- 人工 ----
 
+  /**
+   * 批 2 启动对账（dsh Restart + clowder sweep 的裁剪融合）：
+   * running assignment → ended('interrupted')；票无 Attention（不在等人）时
+   * interruptions+1，未超上限则新建 pending assignment 续跑（launch effect 带
+   * recovery 标记），超上限熔断为 failed 并出一条失败消息。:memory: 测试可直接调用。
+   */
+  recoverAfterRestart(): RecoverySummary {
+    return this.store.atomic(() => {
+      const summary: RecoverySummary = { interrupted: [], relaunched: [], failedByLimit: [] };
+      for (const ticket of this.store.listTickets()) {
+        if (ticket.ended || ticket.attention) continue;
+        const assignment = ticket.assignmentId
+          ? this.store.getAssignment(ticket.assignmentId)
+          : undefined;
+        if (assignment?.status !== "running") continue;
+        this.endAssignment(assignment, "interrupted", "进程重启");
+        const count = (ticket.interruptions ?? 0) + 1;
+        ticket.interruptions = count;
+        if (count > RECOVERY_LIMIT) {
+          this.endTicket(ticket, "failed", `中断恢复超过上限 ${RECOVERY_LIMIT} 次`);
+          this.queueReply(
+            ticket.id,
+            `工单 ${ticket.title}（${ticket.id}）已熔断：进程重启打断 ${count} 次，请检查工作目录后重新提交。`,
+          );
+          summary.failedByLimit.push(ticket.id);
+        } else {
+          const assignmentId = newId("a");
+          this.store.saveAssignment({
+            id: assignmentId,
+            ticketId: ticket.id,
+            status: "pending",
+            createdAt: this.now(),
+          });
+          ticket.assignmentId = assignmentId;
+          this.store.saveTicket(ticket);
+          this.store.enqueueEffect("launch", ticket.id, {
+            ticketId: ticket.id,
+            assignmentId,
+            recovery: true,
+          });
+          summary.relaunched.push(ticket.id);
+        }
+        summary.interrupted.push(ticket.id);
+      }
+      return summary;
+    });
+  }
+
   /** 停一张活票：running assignment 终止为 stopped，票结束为 stopped，出一条通知。 */
   stopTicket(ticketId: string, reason: string): Ticket {
     return this.store.atomic(() => {
@@ -164,6 +225,28 @@ export class Engine {
       this.clearAttention(ticket);
       this.endTicket(ticket, "stopped", reason);
       this.queueReply(ticketId, `工单 ${ticket.title}（${ticketId}）已按人工指令停止：${reason}`);
+      return ticket;
+    });
+  }
+
+  /**
+   * 批 2 回答 Attention：清除待答问题，并把答案合并入队 deliver effect
+   * （dsh Input 投递的最小版；同票答案按到达顺序累积，一次投递多轮）。
+   */
+  answerAttention(ticketId: string, text: string): Ticket {
+    return this.store.atomic(() => {
+      const ticket = this.requireLive(ticketId);
+      if (!ticket.attention) {
+        throw new OrchestratorError("noAttention", `工单 ${ticketId} 当前没有待答问题`);
+      }
+      ticket.attention = undefined;
+      this.store.saveTicket(ticket);
+      this.emit({ type: "attention.cleared", ticketId });
+      const existing = this.store.getEffectPayload("deliver", ticketId) as
+        | { ticketId: string; texts: string[] }
+        | undefined;
+      const texts = [...(existing?.texts ?? []), text];
+      this.store.enqueueEffect("deliver", ticketId, { ticketId, texts });
       return ticket;
     });
   }

@@ -240,6 +240,19 @@ export class OrchestrationStore {
       .all(now) as unknown as EffectRow[];
   }
 
+  /** 读一条 effect 的当前 payload（deliver 合并 texts 用；行不存在返回 undefined）。 */
+  getEffectPayload(kind: string, key: string): unknown {
+    const row = this.db
+      .prepare("SELECT value FROM effect WHERE kind = ? AND key = ?")
+      .get(kind, key) as { value: string } | undefined;
+    if (row === undefined) return undefined;
+    try {
+      return JSON.parse(row.value);
+    } catch {
+      return undefined;
+    }
+  }
+
   listEffectFailures(): EffectRow[] {
     return this.db
       .prepare(
