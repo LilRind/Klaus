@@ -7,6 +7,7 @@
  * 才出一条消息；问题一次一个（Attention 结构化）；健康状态不占空间。
  */
 
+import "dotenv/config";
 import readline from "node:readline/promises";
 import path from "node:path";
 import { OpenAICompatLLM } from "../../src";
