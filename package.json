@@ -35,6 +35,7 @@
     "example:9-06": "tsx examples/9/06-three-day-workflow.ts",
     "verify:9-real": "tsx examples/9/verify-real-llm.ts",
     "example:alignment": "tsx examples/alignment/alignment-demo.ts",
+    "example:orchestrator": "tsx examples/orchestrator/repl.ts",
     "example:alignment:s04": "tsx examples/alignment/alignment-demo.ts s04",
     "example:alignment:s05": "tsx examples/alignment/alignment-demo.ts s05",
     "example:alignment:s06": "tsx examples/alignment/alignment-demo.ts s06",
