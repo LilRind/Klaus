@@ -61,3 +61,6 @@ __pycache__/
 
 # s16 Workflow Runtime 运行时产物
 .runtime/
+
+# S18 orchestrator 运行时数据（state.db / 工位目录）
+orchestrator_data/
