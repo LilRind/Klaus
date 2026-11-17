@@ -5,9 +5,20 @@
 
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { CalculatorTool } from "../tools/builtin/calculator";
+import { AdvancedSearchTool } from "../tools/builtin/search";
+import { EditFileTool, GlobTool, ReadFileTool, WriteFileTool } from "../tools/builtin/file-tools";
+import { PermissionChecker } from "../security/permission";
+import { ToolRegistry } from "../tools/registry";
 import type { ChatLLM } from "../core/llm";
 import { decomposeTask } from "./decompose";
 import { DEFAULTS, type ExecutionMode } from "./model";
+import { MailboxStore } from "./mailbox";
+import { WorkspaceStore } from "./workspace";
+import { TaskBoardStore } from "./swarm/board";
+import { LeadEngine, type LeadWorkerHandle } from "./swarm/lead";
+import { SwarmWorker } from "./swarm/worker";
+import { resolveRoleModel } from "./swarm/roles";
 import { runHybrid } from "./patterns/hybrid";
 import { runParallel, type TaskRunner } from "./patterns/parallel";
 import { extractNumericValue, runSequential } from "./patterns/sequential";
@@ -39,11 +50,22 @@ export interface MultiagentOptions {
   maxConcurrency?: number;
   now?: () => Date;
   runId?: string;
+  /** swarm 线配置（批3）；lead/worker 可用不同 LLM，未配回落 llm。 */
+  swarmOptions?: SwarmRunOptions;
+}
+
+export interface SwarmRunOptions {
+  leadLlm?: ChatLLM;
+  workerLlm?: ChatLLM;
+  maxWorkers?: number;
+  checkpointIntervalMs?: number;
+  /** swarm 整体超时（默认 120s），超时 interrupted 收尾。 */
+  timeoutMs?: number;
 }
 
 export interface RunResult {
   runId: string;
-  line: "simple" | "dag";
+  line: ExecutionMode;
   final: string;
   events: JournalEvent[];
 }
@@ -80,7 +102,7 @@ export class MultiagentOrchestrator {
     const early = resolveMode(this.options.mode ?? "auto");
     if (early?.line === "swarm") {
       this.emit("route.decision", { line: "swarm", skipDecompose: true });
-      throw new MultiagentError("swarmPendingBatch3", "swarm 线在批3 交付（当前批1 仅 simple/DAG）");
+      return this.runSwarm(input);
     }
     if (early?.line === "simple") {
       this.emit("route.decision", { line: "simple", skipDecompose: true });
@@ -129,6 +151,175 @@ export class MultiagentOrchestrator {
     return { runId: this.runId, line: "simple", final, events: this.events };
   }
 
+  /** swarm 线：Lead 事件循环（Promise 竞争驻留点）+ 默认 worker 工厂。 */
+  private async runSwarm(input: string): Promise<RunResult> {
+    const swarm = this.options.swarmOptions ?? {};
+    const leadLlm = swarm.leadLlm ?? this.options.llm;
+    const workerLlm = swarm.workerLlm ?? this.options.llm;
+    const workspace = new WorkspaceStore({
+      now: () => this.nowIso(),
+      onAppend: (entry) => this.emit("workspace.append", { topic: entry.topic, seq: entry.seq }),
+    });
+    const mailbox = new MailboxStore({
+      now: () => this.nowIso(),
+      onSend: (message) => this.emit("mailbox.send", { from: message.from, to: message.to, type: message.type }),
+    });
+    const board = new TaskBoardStore();
+    const runRoot = path.dirname(this.journalFile);
+    const states = new Map<string, LeadWorkerHandle>();
+    const workersById = new Map<string, SwarmWorker>();
+    const eventQueue: import("./model").LeadEvent[] = [];
+    const waiters: Array<(event: import("./model").LeadEvent) => void> = [];
+    const pushEvent = (event: import("./model").LeadEvent): void => {
+      const waiter = waiters.shift();
+      if (waiter) waiter(event);
+      else eventQueue.push(event);
+    };
+
+    const rosterSummary = () =>
+      [...states.values()].map((state) => `${state.agentId}(${state.role})=${state.status}`).join("\n");
+    const boardSummary = () => board.snapshot();
+
+    const spawnWorker = (action: Extract<import("./model").LeadAction, { type: "spawn_agent" }>): LeadWorkerHandle => {
+      const agentId = action.agentId ?? `w${states.size + 1}`;
+      const workspaceDir = path.join(runRoot, "workspaces", agentId);
+      mkdirSync(workspaceDir, { recursive: true });
+      const registry = new ToolRegistry()
+        .register(new CalculatorTool())
+        .register(new ReadFileTool({ workspace: workspaceDir }))
+        .register(new WriteFileTool({ workspace: workspaceDir }))
+        .register(new EditFileTool({ workspace: workspaceDir }))
+        .register(new GlobTool({ workspace: workspaceDir }));
+      // SearchTool 仅当环境配置了搜索 key 才注册（interview §4 安全默认）
+      if (process.env.TAVILY_API_KEY || process.env.SERPAPI_API_KEY) {
+        registry.register(new AdvancedSearchTool());
+      }
+      registry.setPermissionChecker(new PermissionChecker());
+      const resolved = resolveRoleModel(action.tier ?? "medium", { llm: workerLlm });
+      if (resolved.fellBack) this.emit("model.fallback", { agentId, tier: action.tier ?? "medium" });
+      const worker = new SwarmWorker({
+        agentId,
+        role: action.role,
+        llm: resolved.llm,
+        workspace,
+        mailbox,
+        tools: registry,
+        rosterSummary,
+        boardSummary,
+        now: () => this.nowIso(),
+      });
+      const state: LeadWorkerHandle = {
+        agentId,
+        role: action.role,
+        status: "running",
+        assign: (task) => worker.assign(task),
+        requestShutdown: () => worker.requestShutdown(),
+      };
+      states.set(agentId, state);
+      workersById.set(agentId, worker);
+      worker.assign({
+        id: action.taskId ?? `${agentId}-default`,
+        description: action.taskDescription,
+      });
+      void (async () => {
+        try {
+          const signal = await worker.runTask();
+          state.status = worker.status;
+          this.emit(signal.type === "idle" ? "agent.idle" : "agent.completed", {
+            agentId,
+            keyFindings: signal.type === "idle" ? signal.keyFindings : undefined,
+          });
+          pushEvent(
+            signal.type === "idle"
+              ? { type: "agent_idle", agentId, keyFindings: signal.keyFindings }
+              : { type: "agent_completed", agentId, summary: signal.type === "done" ? signal.summary : undefined },
+          );
+        } catch (error) {
+          state.status = "idle";
+          this.emit("worker.error", { agentId, error: String(error) });
+          pushEvent({ type: "agent_idle", agentId, keyFindings: `执行异常：${String(error)}` });
+        }
+      })();
+      return state;
+    };
+
+    const nextEvent = async (): Promise<import("./model").LeadEvent> => {
+      const queued = eventQueue.shift();
+      if (queued) return queued;
+      return new Promise((resolve) => waiters.push(resolve));
+    };
+
+    const lead = new LeadEngine({
+      llm: leadLlm,
+      workspace,
+      mailbox,
+      board,
+      spawnWorker,
+      workers: () => [...states.values()],
+      emit: (type, data) => this.emit(type, data),
+      workspaceRoot: path.join(runRoot, "workspaces"),
+      now: () => Date.now(),
+      maxWorkers: swarm.maxWorkers ?? DEFAULTS.maxWorkers,
+    });
+
+    const timeoutMs = swarm.timeoutMs ?? 120_000;
+    const startedAt = Date.now();
+    let final: string | undefined;
+
+    const actions = await lead.decide({ type: "initial_plan", input });
+    await lead.execute(actions);
+
+    while (final === undefined) {
+      if (lead.isDone || lead.finalReply !== undefined) {
+        final = lead.finalReply ?? "（Lead 已结束，无 final_reply）";
+        break;
+      }
+      const settled =
+        states.size > 0 &&
+        [...states.values()].every((state) => state.status === "idle" || state.status === "done") &&
+        board.pending().length === 0;
+      if (settled) {
+        this.emit("swarm.closing", {});
+        if (lead.finalReply !== undefined) {
+          final = lead.finalReply;
+        } else {
+          const findings = workspace
+            .listAll(0)
+            .map((entry) => `[${entry.topic}] ${JSON.stringify(entry.entry)}`)
+            .join("\n");
+          const notes = [...workersById.values()].flatMap((worker) => worker.runningNotes).join("\n");
+          final = await leadLlm.invoke(
+            [
+              { role: "system", content: "你是多 Agent 团队的 Lead，负责把团队产出综合成给用户的最终回答。" },
+              { role: "user", content: `用户请求：${input}\n\n## Workspace\n${findings}\n\n## Notes\n${notes}` },
+            ],
+            { temperature: 0.3 },
+          );
+          this.emit("synthesis.completed", { chars: final.length });
+        }
+        break;
+      }
+      if (Date.now() - startedAt > timeoutMs) {
+        this.emit("swarm.timeout", { elapsedMs: Date.now() - startedAt });
+        final = "（swarm 运行超时，已强制收尾——journal 保留完整时间线）";
+        break;
+      }
+      const checkpointMs = swarm.checkpointIntervalMs ?? DEFAULTS.checkpointIntervalMs;
+      let checkpointResolve: ((event: import("./model").LeadEvent) => void) | undefined;
+      const checkpointPromise = new Promise<import("./model").LeadEvent>((resolve) => {
+        checkpointResolve = resolve;
+      });
+      const timer = setTimeout(() => checkpointResolve?.({ type: "checkpoint" }), checkpointMs);
+      const event = await Promise.race([nextEvent(), checkpointPromise]);
+      clearTimeout(timer);
+      const eventActions = await lead.decide(event);
+      await lead.execute(eventActions);
+    }
+
+    this.emit("run.completed", { chars: final.length });
+    return { runId: this.runId, line: "swarm", final, events: this.events };
+  }
+
   private withJournal(runner: TaskRunner): TaskRunner {
     return async (subtask, context) => {
       this.emit("task.started", { taskId: subtask.id });
@@ -136,6 +327,10 @@ export class MultiagentOrchestrator {
       this.emit("task.completed", { taskId: subtask.id, success: result.success });
       return result;
     };
+  }
+
+  private nowIso(): string {
+    return (this.options.now ?? (() => new Date()))().toISOString();
   }
 }
 

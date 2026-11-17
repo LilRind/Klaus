@@ -55,6 +55,13 @@ export class WorkspaceStore {
     return fresh.slice(Math.max(0, fresh.length - limit));
   }
 
+  /** 跨主题增量读取（Worker 每轮注入用）：返回 seq > sinceSeq 的全部条目，按 seq 升序。 */
+  listAll(sinceSeq = 0, limit = DEFAULTS.listLimit): WorkspaceEntry[] {
+    const all = [...this.topics.values()].flat().filter((item) => item.seq > sinceSeq);
+    all.sort((a, b) => a.seq - b.seq);
+    return all.slice(Math.max(0, all.length - limit));
+  }
+
   latestSeq(): number {
     return this.seq;
   }

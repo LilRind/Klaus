@@ -68,4 +68,19 @@ describe("MultiagentOrchestrator e2e", () => {
     expect(run.final).toBe("兜底直答");
     expect(run.events).toContainEqual(expect.objectContaining({ type: "decompose.degraded", code: "invalidJson" }));
   });
+
+  it("静态 replay 按序返回 journal 时间线（批4.1）", async () => {
+    const root = tempRoot();
+    const orch = new MultiagentOrchestrator({
+      llm: scriptedLlm(["直答"]),
+      mode: "simple",
+      journalRoot: root,
+      runId: "replay-run",
+    });
+    await orch.run("回放我");
+    const replayed = MultiagentOrchestrator.replay("replay-run", root);
+    expect(replayed[0]).toMatchObject({ type: "run.started" });
+    expect(replayed.at(-1)).toMatchObject({ type: "run.completed" });
+    expect(MultiagentOrchestrator.replay("missing-run", root)).toEqual([]);
+  });
 });

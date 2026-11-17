@@ -21,13 +21,13 @@
 
 ## 3. 批3 Swarm：角色 / Worker / Lead / HITL
 
-- [ ] 3.1 实现 `swarm/roles.ts`（6 角色方法论 prompt + small/medium/large 分档回落主 llm），验证：roles 测试断言未配置档位回落并记录事件
-- [ ] 3.2 实现 `swarm/worker.ts` 单 Action 迭代（六项上下文注入 + 5 Action 分发 + 工具越界拒绝 + 收敛检测强制 idle 附 key_findings），验证：worker 测试覆盖五类 Action、迭代上限强制 idle、越界路径被拒
-- [ ] 3.3 实现 idle→reassign（Running Notes 保留 keepLastN=5 + 预算 +15 + 重派上限 2），验证：reassign 测试断言 T2 首轮含 Notes 摘要且第 3 次重派被拒
-- [ ] 3.4 实现 `swarm/lead.ts` 决策层（无工具 LLM → 12+3 Action 校验，非法降级 noop 记原因），验证：lead 测试覆盖非法动作 "delete_agent" 降级 noop
-- [ ] 3.5 实现 Lead 事件循环（Promise 竞争驻留点 + 四类事件 + 空 checkpoint 跳过 LLM + interim 节流 60s + 连续 2 轮强制收尾），验证：循环测试用注入假钟断言三重防护栏各生效一次
-- [ ] 3.6 实现 file_read 零成本验收（ACCEPT/RETRY）与 human_input 注入（下一轮响应 + interim 回执），验证：测试覆盖"三行占位产物被 RETRY"与"中途输入定价关注点被响应"
-- [ ] 3.7 swarm e2e：initial_plan→spawn→publish→idle→验收→assign→human_input→closing 全链路，验证：ScriptedLLM 剧本断言最终回复与 journal 完整时间线
+- [x] 3.1 实现 `swarm/roles.ts`（6 角色方法论 prompt + small/medium/large 分档回落主 llm），验证：roles 测试断言未配置档位回落并记录事件
+- [x] 3.2 实现 `swarm/worker.ts` 单 Action 迭代（六项上下文注入 + 5 Action 分发 + 工具越界拒绝 + 收敛检测强制 idle 附 key_findings），验证：worker 测试覆盖五类 Action、迭代上限强制 idle、越界路径被拒
+- [x] 3.3 实现 idle→reassign（Running Notes 保留 keepLastN=5 + 预算 +15 + 重派上限 2），验证：reassign 测试断言 T2 首轮含 Notes 摘要且第 3 次重派被拒
+- [x] 3.4 实现 `swarm/lead.ts` 决策层（无工具 LLM → 12+3 Action 校验，非法降级 noop 记原因），验证：lead 测试覆盖非法动作 "delete_agent" 降级 noop
+- [x] 3.5 实现 Lead 事件循环（Promise 竞争驻留点 + 四类事件 + 空 checkpoint 跳过 LLM + interim 节流 60s + 连续 2 轮强制收尾），验证：循环测试用注入假钟断言三重防护栏各生效一次
+- [x] 3.6 实现 file_read 零成本验收（ACCEPT/RETRY）与 human_input 注入（下一轮响应 + interim 回执），验证：测试覆盖"三行占位产物被 RETRY"与"中途输入定价关注点被响应"
+- [x] 3.7 swarm e2e：initial_plan→spawn→publish→idle→验收→assign→human_input→closing 全链路，验证：ScriptedLLM 剧本断言最终回复与 journal 完整时间线
 
 ## 4. 批4 收尾：REPL 完善 / 文档 / 回归
 
