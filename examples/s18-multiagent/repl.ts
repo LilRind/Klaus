@@ -4,6 +4,7 @@
  * 任意时刻：replay <runId> 回放 journal 时间线 / wait 等待后台 run。
  */
 
+import "dotenv/config";
 import * as readline from "node:readline/promises";
 import { OpenAICompatLLM } from "../../src/core/llm";
 import {
@@ -26,7 +27,16 @@ const HELP = [
 ].join("\n");
 
 async function main(): Promise<void> {
-  const llm = new OpenAICompatLLM();
+  let llm: OpenAICompatLLM;
+  try {
+    llm = new OpenAICompatLLM();
+  } catch (error) {
+    console.log("[启动失败] LLM 配置缺失或非法：");
+    console.log(`  ${error instanceof Error ? error.message : String(error)}`);
+    console.log("请检查 .env（LLM_MODEL_ID / LLM_API_KEY / LLM_BASE_URL），可先跑 npm run check:config 验证。");
+    console.log("注意：.env.example 是占位模板；如误用 cp 覆盖了原 .env，请重新填入真实密钥。");
+    return;
+  }
   let mode: ExecutionMode | "auto" = "auto";
   let orchestrator = new MultiagentOrchestrator({ llm, mode, journalRoot: ".multiagent" });
   let pending: Promise<RunResult> | null = null;
