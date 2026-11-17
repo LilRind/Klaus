@@ -77,6 +77,9 @@ LLM 依赖路径另有零 mock 真实模型验证脚本（`npm run verify:9-real
 | `src/harness/` | 集成宿主：轮次串行化 + 轮级 cron 注入 + 异步轮权限 + LLM 错误恢复重试 |
 | `src/workflow/` | Workflow 运行时：journal 断点续跑 + 稳定语义键 + pipeline/parallel + 预算上限 |
 | `src/goal/` | Goal Loop：会话级目标 + 无工具独立完成度判断器 + block/defer/limit 状态机 |
+| `src/multiagent/` | **s18 多Agent编排**：LLM 分解 → 路由（早路由 swarm / isSimple→simple / 其余一律 DAG）→ parallel/sequential/hybrid 执行 → 结果综合；Swarm 线 Lead 事件循环 + Worker 单 Action + Workspace/Mailbox/协商 + run 级 journal/replay |
+
+> s18 边界：多Agent编排新轨（主参考 Shannon 当前代码）；与 s13 teams（Lead-teammate 旧轨）、s16 workflow（脚本编排）、"S待定-工单与可靠执行"（原 S18，事务编排线）互不改动，收编统一留待后续专项。
 
 ## 目录结构
 
@@ -100,6 +103,7 @@ klaus/
 │   ├── harness/                 # 集成宿主：轮次串行化 + 自动唤醒 + LLM 错误恢复
 │   ├── workflow/                # Workflow 运行时：journal 断点续跑 + pipeline/parallel
 │   ├── goal/                    # Goal Loop：会话级目标 + 独立完成度判断器
+│   ├── multiagent/              # s18 多Agent编排：分解/路由/patterns/synthesis + swarm(lead/worker/board) + workspace/mailbox
 │   └── memory/                  # 认知记忆 + RAG（types/storage/rag）
 ├── skills/                      # 技能目录（code-review / git-workflow / api-design）
 ├── tests/                       # vitest 全离线（ScriptedLLM 桩，500+ 用例）

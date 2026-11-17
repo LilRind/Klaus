@@ -31,10 +31,10 @@
 
 ## 4. 批4 收尾：REPL 完善 / 文档 / 回归
 
-- [ ] 4.1 REPL 完善命令集（agents/tasks/workspace/msg/replay），验证：replay 一个已完成 run 输出按序时间线
-- [ ] 4.2 更新 README 模块表（s18 新轨道 + 与 s13/s16/s19 边界说明），验证：README 中命令可照跑
-- [ ] 4.3 全仓回归（vitest 全量 + typecheck）零失败，验证：命令输出全绿
-- [ ] 4.4 落盘《s18多Agent编排-功能与验证指南.md》与《s18剩余事项.md》到 Needs_improvement/lcc-ts/（gitignored），验证：指南含真实模型 V1-V6 冒烟步骤
+- [x] 4.1 REPL 完善命令集（agents/tasks/workspace/msg/replay），验证：replay 一个已完成 run 输出按序时间线
+- [x] 4.2 更新 README 模块表（s18 新轨道 + 与 s13/s16/s19 边界说明），验证：README 中命令可照跑
+- [x] 4.3 全仓回归（vitest 全量 + typecheck）零失败，验证：命令输出全绿
+- [x] 4.4 落盘《s18多Agent编排-功能与验证指南.md》与《s18剩余事项.md》到 Needs_improvement/lcc-ts/（gitignored），验证：指南含真实模型 V1-V6 冒烟步骤
 
 ## Workflow follow-up
 

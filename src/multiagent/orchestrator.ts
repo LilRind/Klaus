@@ -3,7 +3,7 @@
  * run 级 journal：.multiagent/<runId>/events.jsonl 逐事件追加（崩溃=interrupted 不续跑）。
  */
 
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { CalculatorTool } from "../tools/builtin/calculator";
 import { AdvancedSearchTool } from "../tools/builtin/search";
@@ -77,6 +77,55 @@ export class MultiagentOrchestrator {
   private readonly events: JournalEvent[] = [];
   private readonly journalFile: string;
   private journalReady = false;
+  private activeSwarm:
+    | {
+        pushEvent: (event: import("./model").LeadEvent) => void;
+        states: Map<string, LeadWorkerHandle>;
+        board: TaskBoardStore;
+        workspace: WorkspaceStore;
+      }
+    | undefined;
+
+  /** 回放一个 run 的 journal（无则空数组）。 */
+  static replay(runId: string, journalRoot = ".multiagent"): JournalEvent[] {
+    try {
+      return readFileSync(path.join(journalRoot, runId, "events.jsonl"), "utf-8")
+        .trim()
+        .split(/\r?\n/)
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as JournalEvent);
+    } catch {
+      return [];
+    }
+  }
+
+  /** swarm 运行中注入 human_input；非运行态返回 false。 */
+  humanInput(text: string): boolean {
+    if (!this.activeSwarm) return false;
+    this.emit("human.input", { text });
+    this.activeSwarm.pushEvent({ type: "human_input", text });
+    return true;
+  }
+
+  /** 运行中 swarm 的只读快照（agents/tasks/workspace 查看命令用）。 */
+  swarmSnapshot():
+    | {
+        agents: Array<{ agentId: string; role: string; status: string }>;
+        tasks: import("./swarm/board").SwarmTask[];
+        workspaceEntries: import("./model").WorkspaceEntry[];
+      }
+    | undefined {
+    if (!this.activeSwarm) return undefined;
+    return {
+      agents: [...this.activeSwarm.states.values()].map((state) => ({
+        agentId: state.agentId,
+        role: state.role,
+        status: state.status,
+      })),
+      tasks: this.activeSwarm.board.list(),
+      workspaceEntries: this.activeSwarm.workspace.listAll(0),
+    };
+  }
 
   constructor(private readonly options: MultiagentOptions) {
     this.runId = options.runId ?? `run-${Date.now().toString(36)}-${(runCounter += 1).toString(36)}`;
@@ -269,6 +318,7 @@ export class MultiagentOrchestrator {
     const actions = await lead.decide({ type: "initial_plan", input });
     await lead.execute(actions);
 
+    this.activeSwarm = { pushEvent, states, board, workspace };
     while (final === undefined) {
       if (lead.isDone || lead.finalReply !== undefined) {
         final = lead.finalReply ?? "（Lead 已结束，无 final_reply）";
@@ -315,6 +365,7 @@ export class MultiagentOrchestrator {
       const eventActions = await lead.decide(event);
       await lead.execute(eventActions);
     }
+    this.activeSwarm = undefined;
 
     this.emit("run.completed", { chars: final.length });
     return { runId: this.runId, line: "swarm", final, events: this.events };
