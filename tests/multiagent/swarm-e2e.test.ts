@@ -58,4 +58,42 @@ describe("swarm e2e（3.7）：orchestrator mode=swarm 全链路", () => {
       expect(types).toContain(expected);
     }
   });
+
+  it("reassign 真正重新执行：assign 后 runTask 再次运行（orchestrator 层回归）", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "s18r-"));
+    dirs.push(root);
+    const leadReplies = [
+      JSON.stringify({
+        actions: [
+          { type: "create_task", id: "t1", description: "任务一" },
+          { type: "spawn_agent", agentId: "w1", role: "researcher", taskId: "t1", taskDescription: "任务一" },
+        ],
+      }),
+      JSON.stringify({
+        actions: [
+          { type: "create_task", id: "t2", description: "任务二" },
+          { type: "assign_task", agentId: "w1", taskId: "t2", taskDescription: "任务二" },
+        ],
+      }),
+      JSON.stringify({ actions: [{ type: "final_reply", content: "两任务完成" }] }),
+    ];
+    const workerReplies = [
+      '{"type":"idle","keyFindings":"任务一完成"}',
+      '{"type":"idle","keyFindings":"任务二完成"}',
+    ];
+    const orchestrator = new MultiagentOrchestrator({
+      llm: scriptedLlm([]),
+      mode: "swarm",
+      journalRoot: root,
+      swarmOptions: {
+        leadLlm: scriptedLlm(leadReplies),
+        workerLlm: scriptedLlm(workerReplies),
+      },
+    });
+    const run = await orchestrator.run("两个任务");
+    expect(run.final).toBe("两任务完成");
+    const idleEvents = run.events.filter((event) => event.type === "agent.idle");
+    expect(idleEvents).toHaveLength(2);
+    expect(run.events).toContainEqual(expect.objectContaining({ type: "swarm.assigned", taskId: "t2" }));
+  });
 });

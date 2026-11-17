@@ -59,6 +59,8 @@ export interface SwarmRunOptions {
   workerLlm?: ChatLLM;
   maxWorkers?: number;
   checkpointIntervalMs?: number;
+  /** 单 worker 迭代上限（默认 50；测试可调小以真实触发强制收敛）。 */
+  workerIterationLimit?: number;
   /** swarm 整体超时（默认 120s），超时 interrupted 收尾。 */
   timeoutMs?: number;
 }
@@ -224,6 +226,35 @@ export class MultiagentOrchestrator {
       if (waiter) waiter(event);
       else eventQueue.push(event);
     };
+    let workerInflight = 0;
+
+    const startWorkerRun = (agentId: string): void => {
+      workerInflight += 1;
+      void (async () => {
+        const worker = workersById.get(agentId);
+        const state = states.get(agentId);
+        if (!worker || !state) return;
+        try {
+          const signal = await worker.runTask();
+          state.status = worker.status;
+          this.emit(signal.type === "idle" ? "agent.idle" : "agent.completed", {
+            agentId,
+            keyFindings: signal.type === "idle" ? signal.keyFindings : undefined,
+          });
+          pushEvent(
+            signal.type === "idle"
+              ? { type: "agent_idle", agentId, keyFindings: signal.keyFindings }
+              : { type: "agent_completed", agentId, summary: signal.type === "done" ? signal.summary : undefined },
+          );
+        } catch (error) {
+          state.status = "idle";
+          this.emit("worker.error", { agentId, error: String(error) });
+          pushEvent({ type: "agent_idle", agentId, keyFindings: `执行异常：${String(error)}` });
+        } finally {
+          workerInflight -= 1;
+        }
+      })();
+    };
 
     const rosterSummary = () =>
       [...states.values()].map((state) => `${state.agentId}(${state.role})=${state.status}`).join("\n");
@@ -255,13 +286,21 @@ export class MultiagentOrchestrator {
         tools: registry,
         rosterSummary,
         boardSummary,
+        ...(swarm.workerIterationLimit ? { iterationLimit: swarm.workerIterationLimit } : {}),
         now: () => this.nowIso(),
       });
       const state: LeadWorkerHandle = {
         agentId,
         role: action.role,
         status: "running",
-        assign: (task) => worker.assign(task),
+        assign: (task) => {
+          const ok = worker.assign(task);
+          if (ok && worker.status === "running") {
+            state.status = "running";
+            startWorkerRun(agentId);
+          }
+          return ok;
+        },
         requestShutdown: () => worker.requestShutdown(),
       };
       states.set(agentId, state);
@@ -270,25 +309,7 @@ export class MultiagentOrchestrator {
         id: action.taskId ?? `${agentId}-default`,
         description: action.taskDescription,
       });
-      void (async () => {
-        try {
-          const signal = await worker.runTask();
-          state.status = worker.status;
-          this.emit(signal.type === "idle" ? "agent.idle" : "agent.completed", {
-            agentId,
-            keyFindings: signal.type === "idle" ? signal.keyFindings : undefined,
-          });
-          pushEvent(
-            signal.type === "idle"
-              ? { type: "agent_idle", agentId, keyFindings: signal.keyFindings }
-              : { type: "agent_completed", agentId, summary: signal.type === "done" ? signal.summary : undefined },
-          );
-        } catch (error) {
-          state.status = "idle";
-          this.emit("worker.error", { agentId, error: String(error) });
-          pushEvent({ type: "agent_idle", agentId, keyFindings: `执行异常：${String(error)}` });
-        }
-      })();
+      startWorkerRun(agentId);
       return state;
     };
 
@@ -326,6 +347,8 @@ export class MultiagentOrchestrator {
       }
       const settled =
         states.size > 0 &&
+        workerInflight === 0 &&
+        eventQueue.length === 0 &&
         [...states.values()].every((state) => state.status === "idle" || state.status === "done") &&
         board.pending().length === 0;
       if (settled) {
