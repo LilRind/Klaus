@@ -2,8 +2,7 @@
  * s18 任务分解器：一次 LLM 调用输出结构化计划。
  * 来源：SN DecomposeTaskActivity（复杂度+子任务+依赖声明）的进程内 TS 版。
  * 失败一律降级（带错误码），与 s19 线 assessment 的"缺证据不接受"哲学一致。
- * 批1 校验范围：id 唯一/依赖引用存在/无自依赖/形状合法；
- * Kahn 环检测与生产者集合验证在批2 补全（tasks 2.1）。
+ * 全量校验（批2 补全）：基础形状 + Kahn 环检测 + 生产者集合覆盖 consumes。
  */
 
 import type { ChatLLM } from "../core/llm";
@@ -58,6 +57,55 @@ export function validatePlanBasics(plan: TaskPlan): string[] {
     for (const dep of sub.dependencies ?? []) {
       if (dep === sub.id) errors.push(`子任务 ${sub.id} 自依赖`);
       else if (!ids.has(dep)) errors.push(`子任务 ${sub.id} 依赖不存在的 ${dep}`);
+    }
+  }
+  return errors;
+}
+
+/** 批2 全量校验：基础 + 环检测（Kahn）+ 生产者集合（consumes 必须有 produces）。 */
+export function validatePlan(plan: TaskPlan): string[] {
+  const errors = validatePlanBasics(plan);
+  if (errors.length > 0) return errors;
+
+  const ids = new Set(plan.subtasks.map((sub) => sub.id));
+  const indegree = new Map<string, number>();
+  const dependents = new Map<string, string[]>();
+  for (const sub of plan.subtasks) indegree.set(sub.id, 0);
+  for (const sub of plan.subtasks) {
+    for (const dep of sub.dependencies) {
+      indegree.set(sub.id, (indegree.get(sub.id) ?? 0) + 1);
+      dependents.set(dep, [...(dependents.get(dep) ?? []), sub.id]);
+    }
+  }
+  const queue = [...indegree.entries()].filter(([, degree]) => degree === 0).map(([id]) => id);
+  let processed = 0;
+  while (queue.length > 0) {
+    const id = queue.shift();
+    if (id === undefined) break;
+    processed += 1;
+    for (const next of dependents.get(id) ?? []) {
+      const degree = (indegree.get(next) ?? 1) - 1;
+      indegree.set(next, degree);
+      if (degree === 0) queue.push(next);
+    }
+  }
+  if (processed !== plan.subtasks.length) {
+    errors.push("依赖图存在环（Kahn 检测未消费全部节点）");
+  }
+
+  const producers = new Set<string>();
+  for (const sub of plan.subtasks) {
+    for (const topic of sub.produces) producers.add(topic);
+  }
+  const consumers = new Map<string, string[]>();
+  for (const sub of plan.subtasks) {
+    for (const topic of sub.consumes) {
+      consumers.set(topic, [...(consumers.get(topic) ?? []), sub.id]);
+    }
+  }
+  for (const [topic, consumerIds] of consumers) {
+    if (!producers.has(topic)) {
+      errors.push(`主题 ${topic} 被 [${consumerIds.join(", ")}] 消费但无任何生产者`);
     }
   }
   return errors;
@@ -143,7 +191,7 @@ export async function decomposeTask(llm: ChatLLM, input: string): Promise<Decomp
   if (plan === undefined) {
     return { kind: "degraded", code: "invalidJson", reason: "分解输出不是计划对象" };
   }
-  const errors = validatePlanBasics(plan);
+  const errors = validatePlan(plan);
   if (errors.length > 0) {
     return { kind: "degraded", code: "invalidPlan", reason: errors.join("；") };
   }

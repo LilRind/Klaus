@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   decomposeTask,
   extractJsonObject,
+  validatePlan,
   validatePlanBasics,
 } from "../../src/multiagent/decompose";
 import type { TaskPlan } from "../../src/multiagent/model";
@@ -47,6 +48,38 @@ describe("validatePlanBasics", () => {
     expect(validatePlanBasics(base({
       subtasks: [{ id: "t1", description: "d", dependencies: ["t1"], produces: [], consumes: [], suggestedTools: [] }],
     }))[0]).toContain("自依赖");
+  });
+});
+
+describe("validatePlan 全量校验（批2）", () => {
+  const sub = (id: string, over: Partial<{ dependencies: string[]; consumes: string[]; produces: string[] }> = {}) => ({
+    id, description: `${id}`, dependencies: over.dependencies ?? [], produces: over.produces ?? [], consumes: over.consumes ?? [], suggestedTools: [],
+  });
+
+  it("A→B→A 循环被拒绝", () => {
+    const errors = validatePlan({
+      complexity: 0.5,
+      strategy: "parallel",
+      subtasks: [sub("a", { dependencies: ["b"] }), sub("b", { dependencies: ["a"] })],
+    });
+    expect(errors.some((e) => e.includes("环"))).toBe(true);
+  });
+
+  it("consumes 无 producer 被拒绝并指出主题", () => {
+    const errors = validatePlan({
+      complexity: 0.5,
+      strategy: "parallel",
+      subtasks: [sub("a", { consumes: ["data_x"] })],
+    });
+    expect(errors.join("\n")).toContain("data_x");
+  });
+
+  it("produces 覆盖 consumes 通过", () => {
+    expect(validatePlan({
+      complexity: 0.5,
+      strategy: "parallel",
+      subtasks: [sub("a", { produces: ["data_x"] }), sub("b", { consumes: ["data_x"] })],
+    })).toEqual([]);
   });
 });
 
