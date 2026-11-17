@@ -49,7 +49,8 @@
     "example:alignment:s15": "tsx examples/alignment/alignment-demo.ts s15",
     "example:alignment:s16": "tsx examples/alignment/alignment-demo.ts s16",
     "example:alignment:s17": "tsx examples/alignment/alignment-demo.ts s17",
-    "example:alignment:repl": "tsx examples/alignment/alignment-repl.ts"
+    "example:alignment:repl": "tsx examples/alignment/alignment-repl.ts",
+    "example:s18": "tsx examples/s18-multiagent/repl.ts"
   },
   "dependencies": {
     "@qdrant/js-client-rest": "^1.20.0",
