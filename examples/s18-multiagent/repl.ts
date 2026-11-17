@@ -38,14 +38,21 @@ async function main(): Promise<void> {
     return;
   }
   let mode: ExecutionMode | "auto" = "auto";
+  let swarmTimeoutMs: number | undefined;
   let orchestrator = new MultiagentOrchestrator({ llm, mode, journalRoot: ".multiagent" });
   let pending: Promise<RunResult> | null = null;
+  const currentPending = (): Promise<RunResult> | null => pending;
 
   const printResult = (run: RunResult): void => {
     console.log(`\n[run=${run.runId} line=${run.line}]\n${run.final}\n`);
   };
   const launch = (text: string): void => {
-    orchestrator = new MultiagentOrchestrator({ llm, mode, journalRoot: ".multiagent" });
+    orchestrator = new MultiagentOrchestrator({
+      llm,
+      mode,
+      journalRoot: ".multiagent",
+      ...(swarmTimeoutMs ? { swarmOptions: { timeoutMs: swarmTimeoutMs } } : {}),
+    });
     const promise = orchestrator.run(text);
     pending = promise;
     promise
@@ -104,6 +111,20 @@ async function main(): Promise<void> {
       console.log(ok ? "已注入 human_input（Lead 下一轮处理）" : "（当前没有运行中的 swarm）");
       continue;
     }
+    if (line === "msg") {
+      console.log("用法：msg <文本>（swarm 运行中注入 human_input）");
+      continue;
+    }
+    if (line.startsWith("timeout ")) {
+      const seconds = Number.parseInt(line.slice(8).trim(), 10);
+      if (Number.isFinite(seconds) && seconds > 0) {
+        swarmTimeoutMs = seconds * 1_000;
+        console.log(`后续 swarm 超时 = ${seconds}s`);
+      } else {
+        console.log("用法：timeout <正整数秒>");
+      }
+      continue;
+    }
     if (line.startsWith("replay ")) {
       const runId = line.slice(7).trim();
       const events = MultiagentOrchestrator.replay(runId);
@@ -112,7 +133,8 @@ async function main(): Promise<void> {
       continue;
     }
     if (line === "wait") {
-      if (pending) await pending;
+      const current = currentPending();
+      if (current) await current.catch(() => undefined);
       else console.log("（没有等待中的 run）");
       continue;
     }
@@ -122,7 +144,8 @@ async function main(): Promise<void> {
         continue;
       }
       launch(line.slice(7).trim());
-      if (mode !== "swarm") await pending;
+      const current = currentPending();
+      if (mode !== "swarm" && current) await current.catch(() => undefined);
       continue;
     }
     if (pending) {
@@ -130,7 +153,8 @@ async function main(): Promise<void> {
       continue;
     }
     launch(line);
-    if (mode !== "swarm") await pending;
+    const current = currentPending();
+    if (mode !== "swarm" && current) await current.catch(() => undefined);
   }
   rl.close();
 }

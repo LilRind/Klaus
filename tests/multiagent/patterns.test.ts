@@ -63,4 +63,28 @@ describe("runHybrid", () => {
     await expect(runHybrid([task("x", ["ghost"])], async (sub) => result(sub.id, "ok")))
       .rejects.toThrow(/ghost/);
   });
+
+  it("兄弟任务后置拒绝不产生 unhandledRejection（真实超时崩溃回归）", async () => {
+    let unhandled = 0;
+    const onUnhandled = () => {
+      unhandled += 1;
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const first = runHybrid(
+        [task("a"), task("b")],
+        async (sub) => {
+          if (sub.id === "a") throw new Error("first timeout");
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          throw new Error("second timeout");
+        },
+      );
+      await expect(first).rejects.toThrow("first timeout");
+      // 等待兄弟任务的后置拒绝落地
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(unhandled).toBe(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });

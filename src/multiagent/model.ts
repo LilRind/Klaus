@@ -116,4 +116,6 @@ export const DEFAULTS = {
   listLimit: 200,
   /** Swarm 最大 worker 数。 */
   maxWorkers: 6,
+  /** swarm 整体超时（真实模型调研常超 2 分钟，默认 10 分钟）。 */
+  swarmTimeoutMs: 600_000,
 } as const;

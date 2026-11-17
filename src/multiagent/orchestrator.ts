@@ -311,7 +311,7 @@ export class MultiagentOrchestrator {
       maxWorkers: swarm.maxWorkers ?? DEFAULTS.maxWorkers,
     });
 
-    const timeoutMs = swarm.timeoutMs ?? 120_000;
+    const timeoutMs = swarm.timeoutMs ?? DEFAULTS.swarmTimeoutMs;
     const startedAt = Date.now();
     let final: string | undefined;
 
@@ -396,18 +396,26 @@ export function createDagTaskRunner(llm: ChatLLM): TaskRunner {
       injections.push(`## dependency_results\n${JSON.stringify(context.dependencyResults, null, 2)}`);
     }
     const user = [subtask.description, ...injections].join("\n\n");
-    const response = await llm.invoke(
-      [
-        { role: "system", content: "你是多 Agent 编排的子任务执行 worker，独立完成给定子任务并给出简洁结论。" },
-        { role: "user", content: user },
-      ],
-      { temperature: 0.3 },
-    );
+    let response: string;
+    let success = true;
+    try {
+      response = await llm.invoke(
+        [
+          { role: "system", content: "你是多 Agent 编排的子任务执行 worker，独立完成给定子任务并给出简洁结论。" },
+          { role: "user", content: user },
+        ],
+        { temperature: 0.3 },
+      );
+    } catch (error) {
+      // 单任务失败不炸整 run：转 success=false，交由 synthesis 过滤（spec：失败结果被过滤）
+      response = `子任务 ${subtask.id} 执行失败：${error instanceof Error ? error.message : String(error)}`;
+      success = false;
+    }
     return {
       taskId: subtask.id,
       response,
       tokens: Math.ceil(response.length / 4),
-      success: true,
+      success,
       numericValue: extractNumericValue(response),
     };
   };

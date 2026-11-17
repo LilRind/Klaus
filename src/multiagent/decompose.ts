@@ -19,6 +19,7 @@ const SYSTEM_PROMPT = [
   '只输出一个 JSON 对象，形如：',
   '{"complexity":0.6,"strategy":"parallel","subtasks":[{"id":"t1","description":"做什么","dependencies":[],"produces":["topic_a"],"consumes":[],"suggestedTools":[]}]}',
   "规则：complexity 为 0-1；strategy 只能是 parallel 或 sequential；子任务 1-12 个；",
+  "简单判定：闲聊、常识问答、单跳查询等无需多步协作的问题，complexity 应低于 0.3 且只给 0-1 个子任务；",
   "dependencies 只能引用同计划内其他子任务 id 且不得自依赖；后面的任务需要前面结果时用 sequential 或声明 dependencies。不要输出 JSON 以外的任何文字。",
 ].join("\n");
 

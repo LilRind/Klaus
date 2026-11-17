@@ -68,6 +68,8 @@ export async function runHybrid(
   const passResults = options.passDependencyResults ?? true;
   const completions = new Map<string, Deferred<AgentResult>>();
   for (const task of tasks) completions.set(task.id, deferred<AgentResult>());
+  // 防御：Promise.all 首个拒绝后，兄弟任务的后续拒绝若无消费者会成为 unhandledRejection
+  for (const completion of completions.values()) completion.promise.catch(() => undefined);
 
   for (const task of tasks) {
     void (async () => {

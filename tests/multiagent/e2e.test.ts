@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -82,5 +82,70 @@ describe("MultiagentOrchestrator e2e", () => {
     expect(replayed[0]).toMatchObject({ type: "run.started" });
     expect(replayed.at(-1)).toMatchObject({ type: "run.completed" });
     expect(MultiagentOrchestrator.replay("missing-run", root)).toEqual([]);
+  });
+
+  it("DAG 单任务 LLM 失败不炸 run：转 success=false 并被综合过滤（真实超时崩溃回归）", async () => {
+    const root = tempRoot();
+    const planReply = JSON.stringify({
+      complexity: 0.6,
+      strategy: "parallel",
+      subtasks: [
+        { id: "t1", description: "FAILME 必超时任务", dependencies: [], produces: [], consumes: [], suggestedTools: [] },
+        { id: "t2", description: "正常任务：查甲公司营收", dependencies: [], produces: [], consumes: [], suggestedTools: [] },
+      ],
+    });
+    const replies = [planReply, "甲营收 100 亿", "综合结论：甲营收 100 亿"];
+    const flakyLlm = {
+      model: "flaky",
+      provider: "openai" as const,
+      async invoke(messages: Array<{ content: string | null }>) {
+        const last = messages.at(-1)?.content ?? "";
+        if (last.includes("FAILME")) throw new Error("LLM 调用失败：Request timed out.");
+        const reply = replies.shift();
+        if (reply === undefined) throw new Error("队列已空");
+        return reply;
+      },
+      async *stream() {
+        yield "stub";
+      },
+    };
+    const orch = new MultiagentOrchestrator({
+      llm: flakyLlm as never,
+      journalRoot: root,
+      runId: "flaky-dag",
+    });
+    const run = await orch.run("对比两家营收");
+    expect(run.line).toBe("dag");
+    expect(run.final).toContain("100 亿");
+    const failed = run.events.find((event) => event.type === "task.completed" && event.taskId === "t1");
+    expect(failed).toMatchObject({ success: false });
+    expect(run.events.at(-1)).toMatchObject({ type: "run.completed" });
+  });
+
+  it("V6 崩溃语义：run 中途放弃后 journal 保留且无 run.completed（不续跑）", async () => {
+    const root = tempRoot();
+    const hanging = {
+      model: "hang",
+      provider: "openai" as const,
+      invoke: () => new Promise<string>(() => undefined),
+      async *stream() {
+        yield "stub";
+      },
+    };
+    const orch = new MultiagentOrchestrator({
+      llm: hanging as never,
+      journalRoot: root,
+      runId: "crash-run",
+    });
+    const abandoned = orch.run("永不返回");
+    abandoned.catch(() => undefined); // 模拟进程崩溃：放弃等待
+    const journalPath = path.join(root, "crash-run", "events.jsonl");
+    for (let i = 0; i < 50; i += 1) {
+      if (existsSync(journalPath)) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const replayed = MultiagentOrchestrator.replay("crash-run", root);
+    expect(replayed[0]).toMatchObject({ type: "run.started" });
+    expect(replayed.some((event) => event.type === "run.completed")).toBe(false);
   });
 });
